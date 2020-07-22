@@ -1,0 +1,37 @@
+---
+title: "Analysis"
+author: "Ian Moore & Danny Foster"
+date: "7/21/2020"
+output: html_document
+---
+
+# Setup
+
+Load packages:
+
+
+Load data:
+
+
+Print session info:
+
+# Data exploration
+
+## Fuel loads
+
+## Patch sizes
+
+## Shrub fuel neighbors
+
+# Analysis
+
+## LME: Fuel load by time and treatment
+
+## LME: Patch sizes by time and treatment
+
+## Shrub fuel neighbors
+
+# Figures for publication
+
+# Write outputs
+

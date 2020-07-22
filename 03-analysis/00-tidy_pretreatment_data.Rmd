@@ -1,0 +1,1198 @@
+---
+title: "00-scrape_and_tidy_pretreatment_data.rmd"
+author: "Danny Foster & Jacob Levine"
+date: "7/21/2020"
+output: html_document
+---
+
+# Setup
+
+Install or load required packages:
+
+```{r}
+library(tidyxl) # version 1.0.1, for scraping datasheets
+library(ggplot2) # version 2.2.1, for visually checking data
+library(stringr) # version 1.3.1
+library(here) # version 0.1
+library(dplyr) # version 0.7.6
+library(tidyr) # version 0.8.1
+```
+
+Current session info:
+
+```{r}
+sessionInfo()
+```
+
+See "Moonlight/data/02-hand_processed/early_seral/README.md" for changelog
+describing the differences between the hand-processed datasheets and the raw
+datasheets.
+
+Load scraping functions:
+
+```{r}
+source(here::here('00-R', 'scraping.R'))
+
+```
+
+# Scrape Datasheets
+
+
+## Loop over hand-processed datasheets scraping data
+
+```{r}
+
+# initialize empty tidy data frames to store scraped data
+tidy_cover = data.frame(observation_id = numeric(),
+                        date = character(),
+                        block = character(),
+                        plot = character(),
+                        transect = character(),
+                        subtransect = numeric(),
+                        species = character(),
+                        cover_start = numeric(),
+                        cover_end = numeric(),
+                        avg_height_m = numeric())
+
+tidy_fuel_1000h = data.frame(observation_id = numeric(),
+                             date = character(),
+                             block = character(),
+                             plot = character(),
+                             transect = character(),
+                             subtransect = numeric(),
+                             slope = numeric(),
+                             diameter_cm = numeric(),
+                             decay_class = character())
+
+tidy_fuel_depths = data.frame(observation_id = numeric(),
+                              date = character(),
+                              block = character(),
+                              plot = character(),
+                              transect = character(),
+                              subtransect = numeric(),
+                              location_m = numeric(),
+                              litter_cm = numeric(),
+                              duff_cm = numeric(),
+                              fuel_cm = numeric())
+
+tidy_fuel_1_to_100h = data.frame(observation_id = numeric(),
+                                 date = character(),
+                                 block = character(),
+                                 plot = character(),
+                                 transect = character(),
+                                 subtransect = numeric(),
+                                 slope = numeric(),
+                                 startpoint_m = numeric(),
+                                 x1_hour_count = numeric(),
+                                 x10_hour_count = numeric(),
+                                 x100_hour_count = numeric()
+                                 )
+
+tidy_seedlings = data.frame(observation_id = numeric(),
+                            date = character(),
+                            block = character(),
+                            plot = character(),
+                            transect = character(),
+                            subtransect = numeric(),
+                            species = character(),
+                            height_m = numeric())
+
+# loop over 2018 early seral raw data
+
+file_names = dir(here::here('02-data',
+                            '00-source',
+                            '01-manual_clean_2017_2018'), pattern=".xlsx")
+
+
+current_observation_id = 1
+
+# for each datasheet in the folder
+for (filename in file_names) {
+  
+  print(filename)
+  datasheet = xlsx_cells(here::here('02-data',
+                            '00-source',
+                            '01-manual_clean_2017_2018',
+                                    filename))
+  datasheet = datasheet[!datasheet$is_blank, ]
+  print('read datasheet success')
+
+  # scrape the cover, 1000h, depth, 1-100h, and seedlings data into tidy frames
+  new_cover = scrape_cover(datasheet, current_observation_id)
+  new_1000h = scrape_fuel_1000h(datasheet, current_observation_id)
+  new_depths = scrape_fuel_depths(datasheet, current_observation_id)
+  new_1_100h = scrape_fuel_1_to_100h(datasheet, current_observation_id)
+  new_seedlings = scrape_seedlings(datasheet, current_observation_id)
+  print('scraped cover success')
+  print(paste0('current observation id: ', as.character(current_observation_id)))
+  
+  # append the new data to the aggregate tables
+  tidy_cover = rbind(tidy_cover, new_cover)
+  tidy_fuel_1000h = rbind(tidy_fuel_1000h, new_1000h)
+  tidy_fuel_depths = rbind(tidy_fuel_depths, new_depths)
+  tidy_fuel_1_to_100h = rbind(tidy_fuel_1_to_100h, new_1_100h)
+  tidy_seedlings = rbind(tidy_seedlings, new_seedlings)
+  print('bind cover success')
+  
+  # increment observation id
+  current_observation_id = current_observation_id+1
+  print('increment obs id')
+}
+
+```
+
+# Cleaning
+
+## Standardize Data
+
+Standardizing all categorical variables (block, plot, transect, cover species,
+seedling species, decay class).
+
+### Standardize Block Labels
+
+```{r}
+# peek at starting data for one table
+unique(tidy_cover[,'block'])
+
+# apply function to all tidy tables
+
+tidy_cover['block'] = standardize_block(tidy_cover[,'block'])
+tidy_fuel_1_to_100h['block'] = standardize_block(tidy_fuel_1_to_100h[,'block'])
+tidy_fuel_1000h['block'] = standardize_block(tidy_fuel_1000h[,'block'])
+tidy_fuel_depths['block'] = standardize_block(tidy_fuel_depths[,'block'])
+tidy_seedlings['block'] = standardize_block(tidy_seedlings[,'block'])
+# peek standardized labels
+unique(tidy_cover[,'block'])
+
+```
+
+
+
+### Standardize Plot Labels
+
+```{r}
+# peek at starting data for one table
+unique(tidy_cover[,'plot'])
+
+# apply function to all tidy tables
+
+tidy_cover['plot'] = standardize_plot(tidy_cover[,'plot'])
+tidy_fuel_1_to_100h['plot'] = standardize_plot(tidy_fuel_1_to_100h[,'plot'])
+tidy_fuel_1000h['plot'] = standardize_plot(tidy_fuel_1000h[,'plot'])
+tidy_fuel_depths['plot'] = standardize_plot(tidy_fuel_depths[,'plot'])
+tidy_seedlings['plot'] = standardize_plot(tidy_seedlings[,'plot'])
+
+# peek standardized labels
+unique(tidy_cover[,'plot'])
+```
+
+### Standardize Transect Labels
+
+```{r}
+# peek at starting data for one table
+unique(tidy_cover[,'transect'])
+
+# apply the function to all tables
+
+tidy_cover['transect'] = 
+  standardize_transect(tidy_cover[,'transect'])
+tidy_fuel_1_to_100h['transect'] = 
+  standardize_transect(tidy_fuel_1_to_100h[,'transect'])
+tidy_fuel_1000h['transect'] = 
+  standardize_transect(tidy_fuel_1000h[,'transect'])
+tidy_fuel_depths['transect'] = 
+  standardize_transect(tidy_fuel_depths[,'transect'])
+tidy_seedlings['transect'] = 
+  standardize_transect(tidy_seedlings[,'transect'])
+
+# peek standardized labels
+unique(tidy_cover[,'transect'])
+```
+
+### Standardize Species for Seedlings
+
+```{r}
+
+# peek at starting labels
+unique(tidy_seedlings['species'])
+class(tidy_seedlings$species)
+
+# convert to a string
+tidy_seedlings['species'] = as.character(tidy_seedlings[,'species'])
+
+# map variations of Pinus ponderosa to PIPO
+tidy_seedlings[(tidy_seedlings$species=='PP' |
+                  tidy_seedlings$species=='PIPO' |
+                  tidy_seedlings$species == 'Pipo' |
+                  tidy_seedlings$species == 'PIPO ' |
+                  tidy_seedlings$species == 'Pipo ') &
+                 !is.na(tidy_seedlings$species),'species'] = 'PIPO'
+
+# map variations of Pinus jeffreyi to PIJE
+tidy_seedlings[(tidy_seedlings$species == 'JP' |
+                  tidy_seedlings$species == 'PIJE' |
+                  tidy_seedlings$species == 'Pije') &
+                 ! is.na(tidy_seedlings$species),'species'] = 'PIJE'
+
+# map X to NA
+tidy_seedlings[tidy_seedlings$species == 'X' &
+                 ! is.na(tidy_seedlings$species),'species'] = NA
+
+# check standardized labels
+unique(tidy_seedlings$species)
+
+```
+
+### Standardize Seedling Heights
+
+```{r}
+
+### standardize height for seedlings
+unique(tidy_seedlings[,'height_m']) 
+
+# anything above 3 is in cm (there were no
+# seedlings taller than ~ 1.5 meters) so convert it to meters (divide by 100)
+
+tidy_seedlings['height_m'] = ifelse(tidy_seedlings[,'height_m'] > 3,
+                                  tidy_seedlings[,'height_m'] / 100,
+                                  tidy_seedlings[,'height_m'])
+
+# filter any seedlings shorter than 0.1m per protocol
+tidy_seedlings = tidy_seedlings[which(tidy_seedlings$height_m > 0.1 |
+                                        is.na(tidy_seedlings$height_m)), ]
+
+```
+
+### Standardize 1000h Decay Classes
+
+```{r}
+### standardize decay classes
+unique(tidy_fuel_1000h[,'decay_class'])
+
+tidy_fuel_1000h['decay_class'] = factor(
+  stringr::str_to_upper(tidy_fuel_1000h$decay_class),
+  levels = c('R','S'))
+
+head(tidy_fuel_1000h$decay_class)
+
+```
+
+### Standardize Cover Species
+
+```{r}
+unique(tidy_cover$species)
+
+#### first, capitalize everything and trim whitespace
+tidy_cover['species'] = stringr::str_to_upper(tidy_cover[,'species'])
+tidy_cover['species'] = stringr::str_trim(tidy_cover[,'species'])
+
+
+unique(tidy_cover$species)
+
+#### ufoqsymo is symo per. stevens
+tidy_cover[(tidy_cover$species == 'UFOQSYMO ' |
+              tidy_cover$species == 'UFOQSYMO'|
+              tidy_cover$species == 'UFOSYMO' |
+              tidy_cover$species == 'UFOSYMO '|
+              tidy_cover$species == 'UFOSIMO' |
+              tidy_cover$species == 'SIMO' |
+              tidy_cover$species == 'UFOFUZZYCYMO') &
+             !is.na(tidy_cover$species), 'species'] = 'SYMO'
+
+#### bare ground is bg
+tidy_cover[tidy_cover$species == 'BARE GROUND' &
+             !is.na(tidy_cover$species), 'species'] = 'BG'
+
+#### cwd and dwb is a typo of dwd
+tidy_cover[(tidy_cover$species == 'CWD' |
+              tidy_cover$species == 'DWB') &
+             !is.na(tidy_cover$species), 'species'] = 'DWD'
+
+### ARCTO is patula, which was the only species onsite
+tidy_cover[tidy_cover$species=='ARCTO' &
+             !is.na(tidy_cover$species),'species'] = 'ARPA'
+
+### UFOQSOME is likely sambucus mexicana (typo of QSAME)
+### given the height/cover distance/location
+### also, "SORBUS" is a mis-ID: it was actually SAME (foster)
+tidy_cover[(tidy_cover$species=='UFOQSOME' |
+              tidy_cover$species == 'SORBUS') &
+             !is.na(tidy_cover$species), 'species'] = 'SAME'
+
+### I am pretty sure RUNE is a typo of RINE (ribes nevadensis)
+### rather than anything in Rubus. I don't recall seeing any
+### rubus onsite, especially any with a species name starting with NE
+tidy_cover[(tidy_cover$species == 'RUNE') & 
+             !is.na(tidy_cover$species), 'species'] = 'RINE'
+
+### RIBES is the "not RINE and not RIRO" ribes we saw in 2017, which is
+### probably ribes viscossissimum and/or ribes cereum. It was NOT
+### ribes amarum
+tidy_cover[(tidy_cover$species == 'RIBES' |
+              tidy_cover$species == 'RIAM') &
+             !is.na(tidy_cover$species), 'species'] = 'RIBES'
+
+### UFO ASTZ is something in asteracea, which who knows what that stuff is
+tidy_cover[(tidy_cover$species == 'UFOASTZ') &
+             !is.na(tidy_cover$species), 'species'] = 'ASTZ'
+
+### PREN is a typo of PREM, prunus emarginata
+tidy_cover[(tidy_cover$species == 'PREN') &
+             !is.na(tidy_cover$species), 'species'] = 'PREM'
+
+### dogsbane and APAM is APAN
+tidy_cover[(tidy_cover$species == 'DOGSBANE' |
+              tidy_cover$species == 'APAM') &
+             !is.na(tidy_cover$species), 'species'] = 'APAN'
+
+### I'm not sure what UFOFAB is and there are no pictures. it's probably
+### the same as UFOSMELLSNICE but IDK for sure
+tidy_cover[(tidy_cover$species == 'UFOFAB') &
+             !is.na(tidy_cover$species), 'species'] = NA
+
+### recoding lupine albifrons (very specific ID, probably from Derek Stanton)
+### as "LUAL"
+tidy_cover[(tidy_cover$species == 'LUPINE ALBIFRONS')&
+             !is.na(tidy_cover$species), 'species'] = 'LUAL'
+
+### recoding PTAQ (only fern I knew in 2017) to POLZ (Polypodiales spp)
+tidy_cover[(tidy_cover$species == 'PTAQ') &
+             !is.na(tidy_cover$species), 'species'] = 'POLZ'
+
+### IDK what FRVA is... could be fraxinus, but there's no plausible 'VA-'
+### species in fraxinus. Recoding to NA. No photo available.
+tidy_cover[(tidy_cover$species == 'FRVA') &
+             !is.na(tidy_cover$species), 'species'] = NA
+
+
+### recoding muleear, UFOSUNFLOWER to WYMO wyethia mollis
+tidy_cover[(tidy_cover$species == 'MULEEAR' |
+              tidy_cover$species == 'UFOSUNFLOWER') &
+             !is.na(tidy_cover$species), 'species'] = 'WYMO'
+
+### UFO smellsnice is some sort of monardella (Monardella odoratissima?)
+tidy_cover[(tidy_cover$species == 'UFOSMELLSNICE') &
+             !is.na(tidy_cover$species), 'species'] = 'MON-'
+
+### UFO "????", "PRSU?" is SALIX, per Stevens
+tidy_cover[(tidy_cover$species == '????' |
+              tidy_cover$species == 'PRSU?') &
+             !is.na(tidy_cover$species), 'species'] = 'SALIX'
+
+### UFO1 (block 4 CH M and Block 5 CG M) is achillea millefolium per 
+###description, photo, and in-the-field debrief
+tidy_cover[(tidy_cover$species == 'UFO1') &
+             !is.na(tidy_cover$species), 'species'] = 'ACMI'
+
+# 'UFO' on block 4 CN S I'm not sure what it is, there's no note and no
+# referenced photo. Possibly the photo from 2:29:38 PM on May 29 2018, but
+# not sure.
+tidy_cover[(tidy_cover$species == 'UFO') &
+             !is.na(tidy_cover$species) &
+             tidy_cover$block == 4 &
+             tidy_cover$plot == 'CN' &
+             tidy_cover$transect == 'S', 'species' ] = NA
+
+# character NAs to real NAs 
+# NOTE: BEST PRACTICES WOULD BE TO FLAG THESE DIFFERENTLY: THE SOURCE
+# OF MISSINGNESS HERE IS DIFFERENT THAN FOR AN UNIDENTIFIED UFO OR FRVA
+tidy_cover[(tidy_cover$species == 'NA') &
+             !is.na(tidy_cover$species), 'species'] = NA
+
+
+unique(tidy_cover$species)
+
+```
+
+## Check Important NAs
+
+Many dates missing in the original datasheets.
+
+```{r}
+
+# check for incomplete cases (NAs) in the observation ID columns (obs_id,
+# date, block, plot, transect, subtransect)
+head(tidy_cover[!complete.cases(tidy_cover[,1:6]),])
+
+# lots of missing dates, which I'll fill in looking at the calender, emails,
+# and records...
+## block three was measured in the week of 2017-07-17
+tidy_cover[tidy_cover$block == 3 & 
+             tidy_cover$plot == 'EG' &
+             tidy_cover$transect == 'S' &
+             is.na(tidy_cover$date), 'date'] = '2017-07-17'
+tidy_fuel_1_to_100h[tidy_fuel_1_to_100h$block == 3 & 
+             tidy_fuel_1_to_100h$plot == 'EG' &
+             tidy_fuel_1_to_100h$transect == 'S' &
+             is.na(tidy_fuel_1_to_100h$date), 'date'] = '2017-07-17'
+tidy_fuel_1000h[tidy_fuel_1000h$block == 3 & 
+             tidy_fuel_1000h$plot == 'EG' &
+             tidy_fuel_1000h$transect == 'S' &
+             is.na(tidy_fuel_1000h$date), 'date'] = '2017-07-17'
+tidy_fuel_depths[tidy_fuel_depths$block == 3 & 
+             tidy_fuel_depths$plot == 'EG' &
+             tidy_fuel_depths$transect == 'S' &
+             is.na(tidy_fuel_depths$date), 'date'] = '2017-07-17'
+tidy_seedlings[tidy_seedlings$block == 3 & 
+             tidy_seedlings$plot == 'EG' &
+             tidy_seedlings$transect == 'S' &
+             is.na(tidy_seedlings$date), 'date'] = '2017-07-17'
+
+## block 5 plot EH was measured on 2018-05-24
+tidy_cover[tidy_cover$block == 5 & 
+             tidy_cover$plot == 'EH' &
+             is.na(tidy_cover$date), 'date'] = '2018-05-24'
+tidy_fuel_1_to_100h[tidy_fuel_1_to_100h$block == 5 & 
+             tidy_fuel_1_to_100h$plot == 'EH' &
+             is.na(tidy_fuel_1_to_100h$date), 'date'] = '2018-05-24'
+tidy_fuel_1000h[tidy_fuel_1000h$block == 5 & 
+             tidy_fuel_1000h$plot == 'EH' &
+             is.na(tidy_fuel_1000h$date), 'date'] = '2018-05-24'
+tidy_fuel_depths[tidy_fuel_depths$block == 5 & 
+             tidy_fuel_depths$plot == 'EH' &
+             is.na(tidy_fuel_depths$date), 'date'] = '2018-05-24'
+tidy_seedlings[tidy_seedlings$block == 5 & 
+             tidy_seedlings$plot == 'EH' &
+             is.na(tidy_seedlings$date), 'date'] = '2018-05-24'
+
+
+## block 4 plot CH was measured on 2018-05-29
+tidy_cover[tidy_cover$block == 4 &
+             tidy_cover$plot == 'CH' &
+             is.na(tidy_cover$date), 'date'] = '2018-05-29'
+tidy_fuel_1_to_100h[tidy_fuel_1_to_100h$block == 4 &
+             tidy_fuel_1_to_100h$plot == 'CH' &
+             is.na(tidy_fuel_1_to_100h$date), 'date'] = '2018-05-29'
+tidy_fuel_1000h[tidy_fuel_1000h$block == 4 &
+             tidy_fuel_1000h$plot == 'CH' &
+             is.na(tidy_fuel_1000h$date), 'date'] = '2018-05-29'
+tidy_fuel_depths[tidy_fuel_depths$block == 4 &
+             tidy_fuel_depths$plot == 'CH' &
+             is.na(tidy_fuel_depths$date), 'date'] = '2018-05-29'
+tidy_seedlings[tidy_seedlings$block == 4 &
+             tidy_seedlings$plot == 'CH' &
+             is.na(tidy_seedlings$date), 'date'] = '2018-05-29'
+
+
+## block 4 plots EG CN and CG were measured on 2018-05-30
+tidy_cover[tidy_cover$block == 4 &
+             is.element(tidy_cover$plot, 
+                        c('EG','CN','CG')) &
+             is.na(tidy_cover$date), 'date' ] = '2018-05-30' 
+tidy_fuel_1_to_100h[tidy_fuel_1_to_100h$block == 4 &
+             is.element(tidy_fuel_1_to_100h$plot, 
+                        c('EG','CN','CG')) &
+             is.na(tidy_fuel_1_to_100h$date), 'date' ] = '2018-05-30'
+tidy_fuel_1000h[tidy_fuel_1000h$block == 4 &
+             is.element(tidy_fuel_1000h$plot, 
+                        c('EG','CN','CG')) &
+             is.na(tidy_fuel_1000h$date), 'date' ] = '2018-05-30'
+tidy_fuel_depths[tidy_fuel_depths$block == 4 &
+             is.element(tidy_fuel_depths$plot, 
+                        c('EG','CN','CG')) &
+             is.na(tidy_fuel_depths$date), 'date' ] = '2018-05-30'
+tidy_seedlings[tidy_seedlings$block == 4 &
+             is.element(tidy_seedlings$plot, 
+                        c('EG','CN','CG')) &
+             is.na(tidy_seedlings$date), 'date' ] = '2018-05-30'
+
+
+
+## block 4 plots EH and EN were measured on 2018-05-31
+tidy_cover[tidy_cover$block == 4 &
+             is.element(tidy_cover$plot, 
+                        c('EH','EN')) &
+             is.na(tidy_cover$date), 'date' ] = '2018-05-31' 
+tidy_fuel_1_to_100h[tidy_fuel_1_to_100h$block == 4 &
+             is.element(tidy_fuel_1_to_100h$plot, 
+                        c('EH','EN')) &
+             is.na(tidy_fuel_1_to_100h$date), 'date' ] = '2018-05-31'
+tidy_fuel_1000h[tidy_fuel_1000h$block == 4 &
+             is.element(tidy_fuel_1000h$plot, 
+                        c('EH','EN')) &
+             is.na(tidy_fuel_1000h$date), 'date' ] = '2018-05-31'
+tidy_fuel_depths[tidy_fuel_depths$block == 4 &
+             is.element(tidy_fuel_depths$plot, 
+                        c('EH','EN')) &
+             is.na(tidy_fuel_depths$date), 'date' ] = '2018-05-31'
+tidy_seedlings[tidy_seedlings$block == 4 &
+             is.element(tidy_seedlings$plot, 
+                        c('EH','EN')) &
+             is.na(tidy_seedlings$date), 'date' ] = '2018-05-31'
+
+
+```
+
+
+Checking for completeness of all observation ID columns (obs_id, date, block, 
+plot, transect, subtransect, and 'location' if relevant)
+
+```{r}
+# check for incomplete cases (NAs) in the observation ID columns (obs_id,
+# date, block, plot, transect, subtransect, and possibly location)
+tidy_cover[!complete.cases(tidy_cover[,c(1:5,6),]),] # should be 0 rows
+tidy_fuel_1_to_100h[!complete.cases(tidy_fuel_1_to_100h[,c(1:6,8)]),]
+tidy_fuel_1000h[!complete.cases(tidy_cover[,c(1:5,6),]),]
+tidy_fuel_depths[!complete.cases(tidy_fuel_1_to_100h[,c(1:6,8)]),]
+tidy_seedlings[!complete.cases(tidy_cover[,c(1:5,6),]),]
+
+# For seedlings: non-detections are input as NA in the datasheet.  NAs should be 
+# converted to more informative value, but kept.
+
+```
+
+
+
+## Per-table validation and cleaning
+
+### Cover
+
+#### Add columns for total_length and species_name to tidy_cover
+
+```{r}
+## for cover: add columns for total length and species name
+tidy_cover['cover_length'] = abs(tidy_cover[,'cover_start_m']-
+                                   tidy_cover[,'cover_end_m'])
+
+### import species code -> species name map
+species_code_names = read.csv(here('01-context/species_code_names.csv'))
+
+species_code_names['species_code'] = as.character(
+  species_code_names[,'species_code'])
+
+tidy_cover = dplyr::left_join(x = tidy_cover,
+                              y = species_code_names,
+                              by = c('species' = 'species_code'))
+
+
+```
+
+#### Plot Data
+
+```{r}
+ggplot2::ggplot(data = tidy_cover,
+                aes(x = cover_length,
+                    y = avg_height_m,
+                    color = species)) + geom_jitter()
+```
+
+Clear issues: unrealistically large heights and/or lengths...
+
+#### Heights above 2m are suspect
+
+```{r}
+tidy_cover[which(tidy_cover$avg_height_m > 2),]
+```
+
+*Note (Foster 2018-07-03):* Height > 2m is plausible for salix, sambucus, 
+prunus, and DWD (if transect over a tall stump or a large log not entirely flat
+on the ground). The other values (ceco 5m, 25m, 75m tall, rock 5m tall, arpa 
+75m tall) are all clear cases of missing decimals (.5m, .25m, and .75m)
+
+```{r}
+# fix height typos
+
+tidy_cover[which(tidy_cover$species == 'CECO' &
+                   tidy_cover$avg_height_m == 5), 'avg_height_m'] = 0.5
+
+tidy_cover[which(tidy_cover$species == 'CECO' &
+                   tidy_cover$avg_height_m == 25), 'avg_height_m'] = 0.25
+
+tidy_cover[which(tidy_cover$species == 'CECO' &
+                   tidy_cover$avg_height_m == 75), 'avg_height_m'] = 0.75
+
+tidy_cover[which(tidy_cover$species == 'ROCK' &
+                   tidy_cover$avg_height_m == 5), 'avg_height_m'] = 0.5
+
+tidy_cover[which(tidy_cover$species == 'ARPA' &
+                   tidy_cover$avg_height_m == 75), 'avg_height_m'] = 0.75
+
+```
+
+
+#### Other starts / ends outside the range of 0-30m are suspect 
+
+(Not necessarily wrong; see note below.)
+
+```{r}
+tidy_cover[which(tidy_cover$cover_start_m > 30 |
+                   tidy_cover$cover_end_m > 30 |
+                   tidy_cover$cover_start_m < 0 |
+                   tidy_cover$cover_end_m < 0 
+                 ), ] 
+```
+
+*Note (Foster 2018-07-03)* Block 1 datasheets in the week of
+6/27/2017 recorded cover_length directly (rather than the start and end point 
+of each segment) arithmetic and/or transcription errors in the field resulted 
+in some datsheets recording more than 30m of cover on a transect. When 
+back-filling the cover_start and cover_end fields for aggregation, this results
+in some segments starting/ending below 0m (more than 30m from the end of the
+transect) However, I think these issues only damage precision (increase error)
+rather than accuracy (introduce bias), and we should keep the data rather than
+toss them.
+
+```{r}
+# two cases of missing decimal place in cover start/end: b3-ch-m-2 ceco start 
+# at 2575 and b3-eg-s-1 ceco start at 275 should be 25.75 and 2.75, respectively
+tidy_cover[tidy_cover$block == 3 &
+             tidy_cover$plot == 'CH' &
+             tidy_cover$transect == 'M' &
+             tidy_cover$subtransect == 2 &
+             tidy_cover$species == 'CECO' &
+             tidy_cover$cover_start_m == 2575, 'cover_start_m'] = 25.75
+
+tidy_cover[tidy_cover$block == 3 &
+             tidy_cover$plot == 'EG' &
+             tidy_cover$transect == 'S' &
+             tidy_cover$subtransect == 1 &
+             tidy_cover$species == 'CECO' &
+             tidy_cover$cover_start_m == 275, 'cover_start_m'] = 2.75
+
+# recalculate transect cover...
+
+tidy_cover['cover_length'] = abs(tidy_cover[,'cover_start_m']-
+                                   tidy_cover[,'cover_end_m'])
+
+```
+
+#### Transect length != 30m
+
+```{r}
+# get total transect length and look at any cases where != 30 or not ~ 30
+transect_length = dplyr::summarise( .data = dplyr::group_by(.data = tidy_cover,
+                                                 observation_id,
+                                                 date,
+                                                 block,
+                                                 plot,
+                                                 transect,
+                                                 subtransect),
+                         total_length = sum(cover_length))
+
+# plot histogram of cover lengths
+ggplot(transect_length, aes(x=total_length))+geom_histogram()
+```
+
+a little bit of slop (Especially for the 2017 data, where we didn't have 
+in-field validation built in) isn't surprising - transcription errors might 
+make the transect sum to ~30m, rather than 30m exactly. However, the NA value
+and anything more than 2m off definitely bears a closer look...
+
+```{r}
+# NA total?
+transect_length[is.na(transect_length$total_length),]
+# looks like maybe one of the cover chunks has a space in it?
+
+tidy_cover[tidy_cover$block == 3 &
+             tidy_cover$plot == 'EG' &
+             tidy_cover$transect == 'S' &
+             tidy_cover$subtransect == 2,]
+# the CECO NA cover start is "20.75 " in the datasheet
+
+# fix it
+tidy_cover[tidy_cover$block == 3 &
+             tidy_cover$plot == 'EG' &
+             tidy_cover$transect == 'S' &
+             tidy_cover$subtransect == 2 &
+             tidy_cover$species == 'CECO' &
+            is.na(tidy_cover$cover_start_m), 'cover_start_m'] = 20.75
+```
+
+Checking transects with far-off lengths...
+
+```{r}
+transect_length[which(transect_length$total_length > 32 |
+                        transect_length$total_length < 28), ]
+```
+
+Checking the above individually (Foster 2018-07-03), referring to the raw and
+hand-processed datasheets...
+
+```{r}
+# 1-CN-M and 1-EN-S were both measured in the first week of 2017, and
+# are extreme examples of the errors resulting from trying to record cover
+# length directly. NO ACTION
+
+# 2-EH-S: actually missing data for 7.75m - 0m on the transect. I believe
+# we returned to this plot and completed the datasheet in the 2017, but
+# I uploaded the wrong file to the server. It's possible the completed file
+# is still on a BFRS iPad. NO ACTION
+
+# 3-CG-M-1 is a typo: the CECO starting at "2.25" should be "21.25" based
+# on the surrounding cells
+tidy_cover[tidy_cover$block == 3 &
+             tidy_cover$plot == 'CG' &
+             tidy_cover$transect == 'M' &
+             tidy_cover$subtransect == 1 &
+             tidy_cover$species == 'CECO' &
+             tidy_cover$cover_start_m == 2.25, 'cover_start_m'] = 21.25
+
+
+# 3-CG-M-3 is also a typo: the BG starting at "9.25" should be "19.25" based
+# on the surrounding cells
+tidy_cover[tidy_cover$block == 3 &
+             tidy_cover$plot == 'CG' &
+             tidy_cover$transect == 'M' &
+             tidy_cover$subtransect == 3 &
+             tidy_cover$species == 'BG' &
+             tidy_cover$cover_start_m == 9.25, 'cover_start_m'] = 19.25
+
+
+# 3-EG-N-2 is a typo: the ARPA ending at "5.25" should be "15.25" based
+# on the surrounding cells
+tidy_cover[tidy_cover$block == 3 &
+             tidy_cover$plot == 'EG' &
+             tidy_cover$transect == 'N' &
+             tidy_cover$subtransect == 2 &
+             tidy_cover$species == 'ARPA' &
+             tidy_cover$cover_end_m == 5.25, 'cover_end_m'] = 15.25
+
+
+# 3-EH-S-1 is a typo: the CEVE ending at "1" should be "12" based on the
+# surrounding cells
+tidy_cover[tidy_cover$block == 3 &
+             tidy_cover$plot == 'EH' &
+             tidy_cover$transect == 'S' &
+             tidy_cover$subtransect == 1 &
+             tidy_cover$species == 'CEVE' &
+             tidy_cover$cover_end_m == 1, 'cover_end_m'] = 12
+
+```
+
+Refresh cover_length
+
+```{r}
+# recalculate transect cover...
+
+tidy_cover['cover_length'] = abs(tidy_cover[,'cover_start_m']-
+                                   tidy_cover[,'cover_end_m'])
+
+```
+
+Re-run validation post-cleaning
+
+```{r}
+ggplot2::ggplot(data = tidy_cover,
+                aes(x = cover_length,
+                    y = avg_height_m,
+                    color = species)) + geom_jitter()
+
+# the five dropped rows are all instances of heights missing in the original
+# datasheets NO ACTION
+tidy_cover[is.na(tidy_cover$avg_height_m),]
+
+# also note the cluster of observations with ~0.15m height: these are legit
+# and were the result of miscommunication about rounding to the nearest
+# 0.25m in the sampling protocol
+
+# get total transect length and look at any cases where != 30 or not ~ 30
+transect_length = dplyr::summarise( .data = dplyr::group_by(.data = tidy_cover,
+                                                 observation_id,
+                                                 date,
+                                                 block,
+                                                 plot,
+                                                 transect,
+                                                 subtransect),
+                         total_length = sum(cover_length))
+
+# plot histogram of cover lengths
+ggplot(transect_length, aes(x=total_length))+geom_histogram()
+
+transect_length[which(transect_length$total_length > 32 |
+                        transect_length$total_length < 28), ]
+
+# All are discussed above
+
+transect_length[which(transect_length$total_length!=30), ]
+
+```
+
+I don't think it's worth dropping all of the non-30-exactly measurements. And
+even the remaining "way off" ones can be kept IMO, as long as we treat % cover
+as the response variable and adjust the denominator to match the total length
+recorded, rather than always setting the denominator to 30m.
+
+### Make aggregated cover
+
+```{r}
+agg_cover = dplyr::summarise( .data = dplyr::group_by(.data = tidy_cover,
+                                                 observation_id,
+                                                 date,
+                                                 block,
+                                                 plot,
+                                                 transect,
+                                                 subtransect,
+                                                 species),
+                         species_total = sum(cover_length),
+                         species_height = mean(avg_height_m), # should be weighted
+                         species_volume = sum(cover_length*avg_height_m)) # really x-section area
+
+agg_cover = dplyr::left_join(x = agg_cover,
+                             y = transect_length,
+                             by = c('observation_id', 'date', 'block','plot',
+                                    'transect','subtransect'))
+
+agg_cover['percent_cover'] = (agg_cover$species_total / 
+                                agg_cover$total_length) * 100
+
+
+ggplot(agg_cover, aes(x = species, y = percent_cover)) + geom_boxplot()
+ggplot(agg_cover[agg_cover$species == 'CECO' & 
+                   !is.na(agg_cover$species),], 
+       aes(x = block, y = species_height)) + 
+  geom_violin()
+
+ggplot(agg_cover, aes(x = species, y = species_volume)) + geom_boxplot()
+
+ggplot(agg_cover[agg_cover$species == 'CECO' & 
+                   !is.na(agg_cover$species),], 
+       aes(x = block, y = species_volume)) + 
+  geom_violin()
+
+```
+
+## 1 to 100h fuels
+
+```{r}
+ggplot2::ggplot(data = tidy_fuel_1_to_100h,
+                aes(x = x1_hour_count)) + 
+  geom_histogram()
+
+ggplot2::ggplot(data = tidy_fuel_1_to_100h,
+                aes(x = x10_hour_count)) + 
+  geom_histogram()
+
+ggplot2::ggplot(data = tidy_fuel_1_to_100h,
+                aes(x = x100_hour_count)) + 
+  geom_histogram()
+
+tidy_fuel_1_to_100h[is.na(tidy_fuel_1_to_100h$x100_hour_count), ]
+
+# i'm like 90% sure this is actually a 0 and not an NA, but im going to NO
+# ACTION for the time being
+
+```
+
+
+## 1000h Fuels
+
+```{r}
+ggplot2::ggplot(data = tidy_fuel_1000h,
+                aes(x = decay_class,
+                    y = diameter_cm))+geom_violin()
+
+```
+
+Large (100+ cm) diameters are very plausible, there were some very large down
+out there. However, the different distributiosn are a little concerning, and
+maybe indicate a size-related bias when assigning a decay class?
+
+## Fuel Depths
+
+```{r}
+# check that we have the right number of rows in the tidy_fuel_depths table
+# which should have (6 locations per subtransect * 3 subtransects per transect *
+# 3 transects per plot * 6 plots per block * 5 blocks = 1620 rows)
+
+length(tidy_fuel_depths$observation_id) == 1620 # should be TRUE
+
+```
+
+```{r}
+ggplot2::ggplot(data = tidy_fuel_depths,
+                aes(x = litter_cm)) + geom_histogram()
+
+ggplot2::ggplot(data = tidy_fuel_depths,
+                aes(x = duff_cm)) + geom_histogram()
+
+ggplot2::ggplot(data = tidy_fuel_depths,
+                aes(x = fuel_cm)) + geom_histogram()
+
+```
+
+Long right tail here is OK: Protocol says record fuelbed depths up to 2m, and
+2m depths are plausible if the transect went over a large/suspended down log.
+
+## Seedlings
+
+Change NAs to informative values
+```{r}
+## X in "species" column indicates that no seedlings were observed
+## leave height_m as NA in order to preserve integrity of high-level averages
+
+for (i in 1:nrow(tidy_seedlings)) {
+  if (is.na(tidy_seedlings[,"species"][i])) {
+    tidy_seedlings[,"species"][i] <- "X"
+  }
+}
+
+```
+
+```{r}
+## Not interested in plotting number of transects with no seedlings, 
+## create subset without X/NA values
+
+seedlingplotsub <- subset(tidy_seedlings, tidy_seedlings$species != "X")
+
+ggplot2::ggplot(data = seedlingplotsub,
+                aes(x = species, y = height_m)) + geom_boxplot()
+
+ggplot2::ggplot(data = seedlingplotsub,
+                aes( x = species)) + geom_bar() 
+
+```
+
+## Slopes
+
+```{r}
+ggplot(data = tidy_fuel_1_to_100h,
+       aes(x = slope))+
+  geom_histogram()
+
+
+```
+
+# Clean up observation IDs
+
+Making observation IDs more explicit - e.g. instead of 'subtransect = 1', 
+'subtransect = E1-CG-M-1'. We didn't do this when scraping the data because 
+the abbreviate observation IDs are easier to clean up and standardize. Now 
+we make them more explicit, to avoid confusion or statistical mishaps.
+
+## tidy_cover
+
+```{r}
+head(tidy_cover)
+
+tidy_cover['block'] = 
+  as.character(paste0('E', tidy_cover$block))
+tidy_cover['plot'] = 
+  as.character(paste0(tidy_cover$block,
+                      ':',
+                      tidy_cover$plot))
+tidy_cover['transect'] = 
+  as.character(paste0(tidy_cover$plot,
+                      ':',
+                      tidy_cover$transect))
+tidy_cover['subtransect'] = 
+  as.character(paste0(tidy_cover$transect,
+                      ':',
+                      tidy_cover$subtransect))
+
+
+
+# get rid of the observation_id column and rearrange where the 'date' column 
+# goes
+tidy_cover = 
+  tidy_cover[, c('block',
+                    'plot',
+                    'transect',
+                    'subtransect',
+                    'date',
+                    'species',
+                    'cover_start_m',
+                    'cover_end_m',
+                    'avg_height_m',
+                    'cover_length',
+                    'species_name')]
+
+head(tidy_cover)
+```
+
+## tidy_fuel_1_to_100h
+
+```{r}
+head(tidy_fuel_1_to_100h)
+
+tidy_fuel_1_to_100h['block'] = 
+  as.character(paste0('E', tidy_fuel_1_to_100h$block))
+tidy_fuel_1_to_100h['plot'] = 
+  as.character(paste0(tidy_fuel_1_to_100h$block,
+                      ':',
+                      tidy_fuel_1_to_100h$plot))
+tidy_fuel_1_to_100h['transect'] = 
+  as.character(paste0(tidy_fuel_1_to_100h$plot,
+                      ':',
+                      tidy_fuel_1_to_100h$transect))
+tidy_fuel_1_to_100h['subtransect'] = 
+  as.character(paste0(tidy_fuel_1_to_100h$transect,
+                      ':',
+                      tidy_fuel_1_to_100h$subtransect))
+
+
+
+# get rid of the observation_id column and rearrange where the 'date' column 
+# goes
+tidy_fuel_1_to_100h = 
+  tidy_fuel_1_to_100h[, c('block',
+                    'plot',
+                    'transect',
+                    'subtransect',
+                    'date',
+                    'slope',
+                    'startpoint_m',
+                    'x1_hour_count',
+                    'x10_hour_count',
+                    'x100_hour_count')]
+
+head(tidy_fuel_1_to_100h)
+```
+
+## tidy_fuel_1000h
+
+```{r}
+head(tidy_fuel_1000h)
+
+tidy_fuel_1000h['block'] = 
+  as.character(paste0('E', tidy_fuel_1000h$block))
+tidy_fuel_1000h['plot'] = 
+  as.character(paste0(tidy_fuel_1000h$block,
+                      ':',
+                      tidy_fuel_1000h$plot))
+tidy_fuel_1000h['transect'] = 
+  as.character(paste0(tidy_fuel_1000h$plot,
+                      ':',
+                      tidy_fuel_1000h$transect))
+tidy_fuel_1000h['subtransect'] = 
+  as.character(paste0(tidy_fuel_1000h$transect,
+                      ':',
+                      tidy_fuel_1000h$subtransect))
+
+
+
+# get rid of the observation_id column and rearrange where the 'date' column 
+# goes
+tidy_fuel_1000h = 
+  tidy_fuel_1000h[, c('block',
+                    'plot',
+                    'transect',
+                    'subtransect',
+                    'date',
+                    'slope',
+                    'diameter_cm',
+                    'decay_class')]
+
+head(tidy_fuel_1000h)
+```
+
+## tidy_fuel_depths
+
+```{r}
+head(tidy_fuel_depths)
+
+tidy_fuel_depths['block'] = 
+  as.character(paste0('E', tidy_fuel_depths$block))
+tidy_fuel_depths['plot'] = 
+  as.character(paste0(tidy_fuel_depths$block,
+                      ':',
+                      tidy_fuel_depths$plot))
+tidy_fuel_depths['transect'] = 
+  as.character(paste0(tidy_fuel_depths$plot,
+                      ':',
+                      tidy_fuel_depths$transect))
+tidy_fuel_depths['subtransect'] = 
+  as.character(paste0(tidy_fuel_depths$transect,
+                      ':',
+                      tidy_fuel_depths$subtransect))
+
+
+
+# get rid of the observation_id column and rearrange where the 'date' column 
+# goes
+tidy_fuel_depths = 
+  tidy_fuel_depths[, c('block',
+                    'plot',
+                    'transect',
+                    'subtransect',
+                    'location_m',
+                    'date',
+                    'litter_cm',
+                    'duff_cm',
+                    'fuel_cm')]
+
+head(tidy_fuel_depths)
+```
+
+
+## tidy_seedlings
+
+```{r}
+head(tidy_seedlings)
+
+tidy_seedlings['block'] = 
+  as.character(paste0('E', tidy_seedlings$block))
+tidy_seedlings['plot'] = 
+  as.character(paste0(tidy_seedlings$block,
+                      ':',
+                      tidy_seedlings$plot))
+tidy_seedlings['transect'] = 
+  as.character(paste0(tidy_seedlings$plot,
+                      ':',
+                      tidy_seedlings$transect))
+tidy_seedlings['subtransect'] = 
+  as.character(paste0(tidy_seedlings$transect,
+                      ':',
+                      tidy_seedlings$subtransect))
+
+
+
+# get rid of the observation_id column and rearrange where the 'date' column 
+# goes
+tidy_seedlings = 
+  tidy_seedlings[, c('block',
+                    'plot',
+                    'transect',
+                    'subtransect',
+                    'date',
+                    'species',
+                    'height_m')]
+
+head(tidy_seedlings)
+```
+
+
+# Write Output
+
+```{r}
+## Edit filepath in future years to reflect current date
+
+
+write.csv(tidy_cover, 
+          file = here::here('02-data',
+                            '01-intermediate',
+                            '00-tidy_observations',
+                            "cover_pre.csv"),
+          row.names = FALSE)
+
+write.csv(tidy_seedlings, 
+                    file = here::here('02-data',
+                            '01-intermediate',
+                            '00-tidy_observations',
+                            "seedlings_pre.csv"),
+          row.names = FALSE)
+
+write.csv(tidy_fuel_1_to_100h, 
+                    file = here::here('02-data',
+                            '01-intermediate',
+                            '00-tidy_observations',
+                            "fwd_pre.csv"),
+          row.names = FALSE)
+
+write.csv(tidy_fuel_depths, 
+          file = here::here('02-data',
+                            '01-intermediate',
+                            '00-tidy_observations',
+                            "litterduff_pre.csv"),
+          row.names = FALSE)
+
+write.csv(tidy_fuel_1000h,           
+          file = here::here('02-data',
+                            '01-intermediate',
+                            '00-tidy_observations',
+                            "cwd_pre.csv"),
+          row.names = FALSE)
+
+```
+
+
+
