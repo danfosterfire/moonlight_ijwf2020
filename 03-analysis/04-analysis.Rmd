@@ -2,36 +2,664 @@
 title: "Analysis"
 author: "Ian Moore & Danny Foster"
 date: "7/21/2020"
-output: html_document
+output:
+  word_document: 
+    toc: true
+    toc_depth: 2
+  html_document: default
 ---
+
+```{r}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+
+```
 
 # Setup
 
 Load packages:
+```{r}
+library(here)
+library(tidyverse)
+library(sf)
+library(ggplot2)
+library(GGally)
+library(glmmTMB)
 
+
+source(here::here('00-R', 'model_validation.R'))
+```
 
 Load data:
 
+```{r}
+# log transform variables after adding the minimum non-zero value to each 
+# observation (to avoid trying to take log(0))
+log_transform = function(x){log(x+min(x[x>0]))}
+
+# cover_long has 1 row per 0.25m segment, with columns for position (along 
+# the 90m transect), species (specific cover), cover_type (broad cover categories), 
+# and average height in cm 
+cover_long = 
+  readRDS(here::here('02-data', '02-for_analysis', 'cover_long.rds')) %>%
+  
+  # enforce level ordering for time
+  mutate(time = factor(time, levels = c('pre', 'post')))
+
+# patches has 1 row per contiguous patch of a cover_type. Patches can span 
+# subtransects within a 90m transect, and we treat 0m as contiguous with 90m 
+# (ie transects are treated as wrapping). Columns give the cover type, 
+# average height, and along-transect length of each patch. fire_type is an 
+# even coarser version of cover-type, with categories high low and none. 
+patches = 
+  readRDS(here::here('02-data', '02-for_analysis', 'patches.rds')) %>%
+  
+  # enforce level ordering for time
+  mutate(time = factor(time, levels = c('pre', 'post')))
+
+# observed data on shrub cover and fuel loads for the 10m sub-sub-transects. 
+# note that the CWD load is an average at the 30m subtransect level, so we 
+# expect strong correlation in fuel loads at the subtransect level. This 
+# must be explicitly included in a model, either via a random effect for 
+# subtransects or an explicitly spatial random effect. 
+obs_10m = 
+  readRDS(here::here('02-data', 
+                     '02-for_analysis', 
+                     'obs_10m.rds')) %>%
+  
+  # enforce level ordering for time
+  mutate(time = factor(time, levels = c('pre', 'post'))) %>%
+  
+  # convert from .sf object to dataframe 
+  mutate(x = st_coordinates(.)[,'X'],
+         y = st_coordinates(.)[,'Y']) %>%
+  as.data.frame() %>%
+  dplyr::select(-geometry) %>%
+  
+  # make dummy variables for 'time'; this will allow different correlation 
+  # structures for the different times
+  mutate(pre = ifelse(time=='pre',TRUE,FALSE),
+         post = ifelse(time=='post', TRUE, FALSE)) %>%
+  
+  # log transform the fuels
+  mutate(log_total = log_transform(total_mgha),
+         log_litterduff = log_transform(litterduff_mgha),
+         log_fwd = log_transform(fwd_mgha),
+         log_cwd = log_transform(cwd_mgha))
+
+
+
+
+count_patches = 
+  patches %>%
+  group_by(time, treatment, planting, followup, 
+           block, plot, transect) %>%
+  summarise(n_patches = n()) %>%
+  ungroup() %>%
+  left_join(., 
+            cover_long %>%
+              group_by(time, transect) %>%
+              summarise(transect_length = 0.25*n()) %>%
+              ungroup())
+
+# 1 row per cover type on each subtransect. columns giving observation IDs 
+# and the percent of the subtransect occupied by each cover type
+cover_agg = 
+  cover_long %>%
+  group_by(time, planting, followup,
+           block, plot, transect, subtransect,
+           cover_type) %>%
+  summarise(cover_length = 0.25*n()) %>%
+  ungroup() %>%
+  complete(nesting(time, planting, followup, 
+                  block, plot, transect, subtransect),
+           cover_type) %>%
+  mutate(cover_length = ifelse(is.na(cover_length), 0, cover_length)) %>%
+  left_join(cover_long %>%
+              group_by(time, planting, followup,
+              block, plot, transect, subtransect) %>%
+              summarise(subtransect_length = 0.25*n()) %>%
+              ungroup()) %>%
+  mutate(p_cover = cover_length / subtransect_length)
+
+
+```
 
 Print session info:
 
+```{r}
+sessionInfo()
+```
+
 # Data exploration
+
+Data exploration plots. Used to check assumptions and inform analysis, not 
+intended for publication.
 
 ## Fuel loads
 
-## Patch sizes
+### Y distributions
 
-## Shrub fuel neighbors
+```{r}
 
-# Analysis
+ggplot(data = 
+         obs_10m %>%
+         pivot_longer(c(litterduff_mgha, fwd_mgha, cwd_mgha, total_mgha),
+                      names_to = c('fuel_component','units'),
+                      values_to = 'load_mgha',
+                      names_sep = '_') %>%
+         select(time, planting, followup, fuel_component, load_mgha, x, y),
+       aes(x = load_mgha))+
+  geom_histogram()+
+  facet_wrap(~fuel_component, scales = 'free')+
+  theme_minimal()
 
-## LME: Fuel load by time and treatment
+ggplot(data = 
+         obs_10m %>%
+         pivot_longer(c(log_litterduff, log_fwd, log_cwd, log_total),
+                      names_to = 'fuel_component',
+                      values_to = 'log_mgha') %>%
+         select(time, planting, followup, fuel_component, log_mgha, x, y),
+       aes(x = log_mgha))+
+  geom_histogram()+
+  facet_wrap(~fuel_component, scales = 'free')+
+  theme_minimal()
 
-## LME: Patch sizes by time and treatment
+```
 
-## Shrub fuel neighbors
+### X distributions
+
+```{r}
+ggplot(data = obs_10m,
+       aes(x = time, fill = paste0(planting, ':', followup)))+
+  geom_bar(position = position_stack())+
+  theme_minimal()+
+  scale_fill_viridis_d()
+
+ggplot(data = 
+         obs_10m %>%
+         pivot_longer(c(x, y),
+                      names_to = 'axis',
+                      values_to = 'coordinate'),
+       aes(x = coordinate))+
+  geom_histogram()+
+  facet_wrap(~axis, scales = 'free')
+
+ggplot(data = obs_10m,
+       aes(x = x, y = y, color = block))+
+  geom_point(size = 0)+
+  theme_minimal()+
+  coord_fixed()+
+  scale_color_viridis_d(begin = 0.05, end = 0.85, option = 'C')
+
+```
+
+### XX relationships
+
+```{r}
+ggpairs(obs_10m %>% select(time, planting, followup, x, y))
+
+```
+
+### XY relationships and interactions
+
+
+
+
+```{r}
+ggplot(data = 
+         obs_10m %>%
+         pivot_longer(c(litterduff_mgha, fwd_mgha, cwd_mgha, total_mgha),
+                      names_to = c('fuel_component','units'),
+                      values_to = 'load_mgha',
+                      names_sep = '_') %>%
+         select(time, planting, followup, fuel_component, load_mgha, x, y),
+       aes(y = load_mgha, x = time))+
+  geom_boxplot()+
+  facet_wrap(~fuel_component, scales = 'free')+
+  theme_minimal()
+
+ggplot(data = 
+         obs_10m %>%
+         pivot_longer(c(litterduff_mgha, fwd_mgha, cwd_mgha, total_mgha),
+                      names_to = c('fuel_component','units'),
+                      values_to = 'load_mgha',
+                      names_sep = '_') %>%
+         select(time, planting, followup, fuel_component, load_mgha, x, y),
+       aes(y = load_mgha, x = planting))+
+  geom_boxplot()+
+  facet_wrap(~fuel_component, scales = 'free')+
+  theme_minimal()
+
+ggplot(data = 
+         obs_10m %>%
+         pivot_longer(c(litterduff_mgha, fwd_mgha, cwd_mgha, total_mgha),
+                      names_to = c('fuel_component','units'),
+                      values_to = 'load_mgha',
+                      names_sep = '_') %>%
+         select(time, planting, followup, fuel_component, load_mgha, x, y),
+       aes(y = load_mgha, x = followup))+
+  geom_boxplot()+
+  facet_wrap(~fuel_component, scales = 'free')+
+  theme_minimal()
+
+ggplot(data = 
+         obs_10m %>%
+         pivot_longer(c(litterduff_mgha, fwd_mgha, cwd_mgha, total_mgha),
+                      names_to = c('fuel_component','units'),
+                      values_to = 'load_mgha',
+                      names_sep = '_') %>%
+         select(time, planting, followup, fuel_component, load_mgha, x, y),
+       aes(y = load_mgha, x = x))+
+  geom_point(size = 0)+
+  facet_wrap(~fuel_component, scales = 'free')+
+  theme_minimal()
+
+ggplot(data = 
+         obs_10m %>%
+         pivot_longer(c(litterduff_mgha, fwd_mgha, cwd_mgha, total_mgha),
+                      names_to = c('fuel_component','units'),
+                      values_to = 'load_mgha',
+                      names_sep = '_') %>%
+         select(block, time, planting, followup, fuel_component, load_mgha, x, y),
+       aes(y = load_mgha, x = block))+
+  geom_boxplot()+
+  facet_wrap(~fuel_component, scales = 'free')+
+  theme_minimal()
+
+
+ggplot(data = 
+         obs_10m %>%
+         pivot_longer(c(litterduff_mgha, fwd_mgha, cwd_mgha, total_mgha),
+                      names_to = c('fuel_component','units'),
+                      values_to = 'load_mgha',
+                      names_sep = '_') %>%
+         select(block, time, planting, followup, fuel_component, load_mgha, x, y),
+       aes(y = load_mgha, x = block, fill = time))+
+  geom_boxplot()+
+  facet_wrap(~fuel_component, scales = 'free')+
+  theme_minimal()+
+  scale_fill_viridis_d(option = 'B', begin = 0.5, end = 0.75)
+
+ggplot(data = 
+         obs_10m %>%
+         pivot_longer(c(litterduff_mgha, fwd_mgha, cwd_mgha, total_mgha),
+                      names_to = c('fuel_component','units'),
+                      values_to = 'load_mgha',
+                      names_sep = '_') %>%
+         select(block, time, planting, followup, fuel_component, load_mgha, x, y),
+       aes(y = load_mgha, x = planting, fill = time))+
+  geom_boxplot()+
+  facet_wrap(~fuel_component, scales = 'free')+
+  theme_minimal()+
+  scale_fill_viridis_d(option = 'B', begin = 0.5, end = 0.75)
+
+ggplot(data = 
+         obs_10m %>%
+         pivot_longer(c(litterduff_mgha, fwd_mgha, cwd_mgha, total_mgha),
+                      names_to = c('fuel_component','units'),
+                      values_to = 'load_mgha',
+                      names_sep = '_') %>%
+         select(block, time, planting, followup, fuel_component, load_mgha, x, y),
+       aes(y = load_mgha, x = followup, fill = time))+
+  geom_boxplot()+
+  facet_wrap(~fuel_component, scales = 'free')+
+  theme_minimal()+
+  scale_fill_viridis_d(option = 'B', begin = 0.5, end = 0.75)
+
+
+```
+
+**Strongly** skewed fuel loads, even more so than is usual. Looks like time 
+has an effect. Maybe 1 of the treatments too? Though the variation explained 
+by treatment and block is similar. 1000h loads very strongly correlated with 
+total loads, which makes sense given the fuel type (ots of down logs, not 
+much FWD or litter / duff). Strong effect of time, but without clear interactions 
+with planting and/or followup: Suggests that site-prep (which was applied 
+universally) is most of the time effect. 
+
+## Cover continuity
+
+I think it makes more sense to describe cover continuity in terms of the 
+number of patches per transect, rather than as the size of patches. Here's 
+why:
+
+```{r}
+ggplot(data = patches,
+       aes(x = time, fill = cover_type))+
+  geom_bar()+
+  theme_minimal()+
+  scale_fill_viridis_d()+
+  labs(y = 'Number of patches')
+
+```
+
+If we fit a model looking at the size of each patch, then the N for 
+post-treatment (smaller patches) is way higher than for pre-treatment. 
+I *think* LMEs can handle unbalanced data, but the LMEs I've run on 
+patch size perform poorly on validation tests, even after log-transforming 
+the sizes. 
+
+Instead, we treat model the number of distinct patches on each transect:
+
+### Y distributions
+
+```{r}
+ggplot(data = count_patches, 
+       aes(x = n_patches/transect_length))+
+  geom_histogram()+
+  theme_minimal()
+
+```
+
+### X distributions and XX relationships
+
+These are all categorical variables in the balanced study design:
+
+```{r}
+ggplot(data = count_patches,
+       aes(x = time, fill = paste0(planting, ':', followup)))+
+  geom_bar(position = position_stack())+
+  theme_minimal()+
+  scale_fill_viridis_d()+
+  labs(y = 'N replicates (number of transects)')
+
+```
+
+
+### XY Relationships and interactions
+
+
+```{r}
+ggplot(data = count_patches,
+       aes(x = n_patches/transect_length, color = time))+
+  geom_density(lwd = 1)+
+  scale_color_viridis_d(begin = 0.3, end = 0.6, option = 'B')+
+  theme_minimal()
+  
+ggplot(data = count_patches,
+       aes(x = n_patches/transect_length, color = planting))+
+  geom_density(lwd = 1)+
+  scale_color_viridis_d(begin = 0.3, end = 0.6, option = 'C')+
+  theme_minimal()
+
+ggplot(data = count_patches,
+       aes(x = n_patches/transect_length, color = followup))+
+  geom_density(lwd = 1)+
+  scale_color_viridis_d(begin = 0.1, end = 0.8, option = 'D')+
+  theme_minimal()
+
+ggplot(data = count_patches,
+       aes(x = n_patches/transect_length, color = time))+
+  geom_density(lwd = 1)+
+  scale_color_viridis_d(begin = 0.3, end = 0.6, option = 'B')+
+  theme_minimal()+
+  facet_grid(planting~followup)
+
+```
+
+
+## Cover composition
+
+### Y distributions
+
+```{r}
+
+ggplot(data = cover_agg,
+       aes(x = p_cover))+
+  geom_histogram()+
+  theme_minimal()
+
+ggplot(data = cover_agg,
+       aes(x = p_cover))+
+  geom_density()+
+  theme_minimal()
+
+```
+
+### X distributions and XX relationships
+
+Again, all of the X variables are categorical variables and we have a balanced 
+design. (Or mostly so; some subtransects are missing.)
+
+### XY Relationships and interactions
+
+```{r}
+ggplot(data = cover_agg,
+       aes(x = time, y = p_cover, fill = cover_type))+
+  geom_col(position = position_fill())+
+  theme_minimal()+
+  scale_fill_viridis_d()
+
+ggplot(data = cover_agg,
+       aes(x = block, y = p_cover, fill = cover_type))+
+  geom_col(position = position_fill())+
+  theme_minimal()+
+  scale_fill_viridis_d()
+
+ggplot(data = cover_agg,
+       aes(x = block, y = p_cover, fill = cover_type))+
+  geom_col(position = position_fill())+
+  theme_minimal()+
+  scale_fill_viridis_d()+
+  facet_grid(.~time)
+
+ggplot(data = cover_agg,
+       aes(x = time, y = p_cover, fill = cover_type))+
+  geom_col(position = position_fill())+
+  theme_minimal()+
+  scale_fill_viridis_d()+
+  facet_grid(planting~followup)
+```
+
+## Spatial structure
+
+
+
+# Analyses
+
+## Fuel loads
+
+Note the distributions 
+with lots of 0s and highly skewed positive-continuous values:  Good candidates 
+for a tweedie (compound poisson gamma) model. 
+
+
+Fit LMEs on log-transformed data:
+
+```{r}
+litterduff.lme = 
+  nlme::lme(data = obs_10m,
+            log_litterduff ~ time * planting * followup,
+            random =~ 1|block/plot/transect/subtransect/subsubtransect)
+
+validate_model(X_i = obs_10m,
+               y_i = obs_10m$log_litterduff,
+               yhat_i = fitted(litterduff.lme),
+               ep_i = residuals(litterduff.lme))
+
+
+```
+
+This looks worse at first glance than I think it actually is. Theres a clear 
+bimodal distribution to the residuals, which is a real problem. There's 
+also two clear groups of fitted values, which is not a real problem. The zero-
+truncation at the low end is evident in the residuals, but the residuals 
+do appear homoskedastic. Litter-duff was the most skewed of the fuel components. 
+
+```{r}
+fwd.lme = 
+  nlme::lme(data = obs_10m,
+            log_fwd ~ time * planting * followup,
+            random =~ 1|block/plot/transect/subtransect/subsubtransect)
+
+validate_model(X_i = obs_10m,
+               y_i = obs_10m$log_fwd,
+               yhat_i = fitted(fwd.lme),
+               ep_i = residuals(fwd.lme))
+
+
+```
+
+So-so. Again zero-truncation is skewing the residual distribution, even 
+for a log-transformed response.
+
+```{r}
+cwd.lme = 
+  nlme::lme(data = obs_10m,
+            log_cwd ~ time * planting * followup,
+            random =~ 1|block/plot/transect/subtransect/subsubtransect)
+
+validate_model(X_i = obs_10m,
+               y_i = obs_10m$log_cwd,
+               yhat_i = fitted(cwd.lme),
+               ep_i = residuals(cwd.lme))
+
+```
+
+These look OK. 
+
+```{r}
+
+# try an lme on log-totals:
+total.lme = 
+  nlme::lme(data = obs_10m,
+            log_total ~ time * planting * followup,
+            random =~ 1|block/plot/transect/subtransect/subsubtransect)
+
+validate_model(X_i = obs_10m,
+               y_i = obs_10m$log_total,
+               yhat_i = fitted(total.lme),
+               ep_i = residuals(total.lme))
+
+```
+
+
+This looks OK, but not great. There is an obvious decrease in the residual variance 
+as the fitted values increase. The residuals are slightly skewed but pretty good. 
+I also ran these models as a glmm with a tweedie-distributed response. Those 
+models had good-but-not-perfect validation plots, but are more 
+difficult to interpret. The fixed effect parameter estimates were very 
+similar between the LME and GLMM versions, which is good evidence that the 
+LME findings are robust. 
+
+
+
+## Cover continuity
+
+We run a GLMM on the poisson-distributed response, the number of patches 
+per transect. The more patches per transect, the more discontinuous the cover. 
+I've aggregated patches which using the high/low/no fuels categories described 
+in the paper. Using a generalized poisson model (
+$\text{Var} = \mu \times \text{exp} ( \eta )$) because the standard poisson 
+$\text{Var} = \mu$ was overdispersed. Using the transect length / 90 as an 
+offset to account for cut-off transects. The response is the number of 
+patches per transect. 
+
+```{r}
+n_patches.fit = 
+  glmmTMB(data = count_patches,
+          n_patches ~ time * planting * followup + 
+            (1|block/plot/transect),
+          disp =~ 1,
+          family = genpois(link = 'log'),
+          offset = count_patches$transect_length/90)
+
+summary(n_patches.fit)
+
+plot(DHARMa::simulateResiduals(n_patches.fit))
+```
+
+Validation plots look great!
+
+Also doing an LME on log(patch size):
+
+```{r}
+patch_size.fit = 
+  nlme::lme(data = 
+              patches %>%
+              mutate(log_size = log(cover_length)),
+          log_size ~ time * planting * followup, 
+          random =~ 1|block/plot/transect)
+
+validate_model(X_i = patches,
+               y_i = log(patches$cover_length),
+               yhat_i = fitted(patch_size.fit),
+               ep_i = residuals(patch_size.fit))
+
+
+```
+
+Validation plots look pretty good. 
+
+
+
+## Cover composition
+
+Fitting a multinomial model is hard, and a multinomial mixed model is harder. 
+Instead just report summary statistics as in the current draft:
+
+```{r}
+composition_results = 
+  cover_agg %>%
+  group_by(time, cover_type) %>%
+  summarise(p_cover.mean = mean(cover_length/subtransect_length),
+            p_cover.sd = sd(cover_length/subtransect_length))
+
+
+
+```
+
+This could be turned into an actual statistical model if reviewers want us to.
+
+## Spatial structure
+
+# Results
+
+## Fuel loads
+
+Note that these parameters are for a linear model for the *log* fuel loads. 
+Intercept group is pretreatment:cluster:grubbing. 
+
+```{r}
+round(summary(litterduff.lme)$tTable, 3)
+round(summary(fwd.lme)$tTable, 3)
+round(summary(cwd.lme)$tTable, 3)
+round(summary(total.lme)$tTable, 3)
+
+```
+
+
+
+## Cover continuity
+
+```{r}
+
+summary(n_patches.fit)
+```
+
+## Cover composition
+
+```{r}
+composition_results
+```
+
+## Spatial structure of shrub patches
+
+# Tables for publication
+
+## Table 1: Changes in fuel loads
 
 # Figures for publication
+
+## Figures 1 and 2: Photos
+
+## Figure 3: Sampling design
+
+## Figure 4: Patch size distributions by cover type and time
+
+## Figure 5: CDF functions for patch size distributions by time and intensity class
+
+## Figure 6: Correlograms for shrub cover
 
 # Write outputs
 

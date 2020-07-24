@@ -195,7 +195,7 @@ fuel_loads = Rfuels::estimate_fuel_loads(fuels_data = Rfuels_fuels,
                                          trees_data = treelist,
                                          results_type = 'full')
 
-fuel_loads = 
+fuels = 
   fuels %>%
   left_join(fuel_loads %>%
               mutate(fines_mgha = fuelload_fwd_Mgha+fuelload_litter_Mgha) %>%
@@ -265,14 +265,21 @@ missing_pre_or_post =
   ungroup() %>%
   filter(time != 2)
 
-missing_pre_or_post = missing_pre_or_post$time
+missing_pre_or_post = missing_pre_or_post$subtransect
 
 fuels = 
   fuels %>%
   filter(!is.element(subtransect, missing_pre_or_post))
 
+# finally, add  'treatment' columns for analysis later
+fuels = 
+  fuels %>%
+  mutate(treatment = gsub(fuels$plot, pattern = '^.*:', replacement = ''),
+         planting = substr(treatment, 1, 1),
+         followup = substr(treatment, 2, 2))
+
 #### write results #############################################################
 
-write.csv(fuels, here::here('02-data', '02-for_analysis', 'fuels.csv'))
-saveRDS(fuels, here::here('02-data', '02-for_analysis', 'fuels.rds'))
+write.csv(fuels, here::here('02-data', '01-intermediate', 'fuel_loads.csv'))
+saveRDS(fuels, here::here('02-data', '01-intermediate', 'fuel_loads.rds'))
 

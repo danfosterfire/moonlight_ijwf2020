@@ -93,7 +93,12 @@ missing_pre_or_post =
   ungroup() %>%
   filter(time != 2)
 
+missing_pre_or_post
 
+missing_pre_or_post = missing_pre_or_post$subtransect
+cover = 
+  cover %>%
+  filter(!is.element(subtransect, missing_pre_or_post))
 
 
 #### data munging ##############################################################
@@ -143,6 +148,54 @@ cover =
             na_matches = 'na') %>%
   mutate(cover_type = ifelse(is.na(cover_type), 'UNK', cover_type))
 
+# finally, add a 'treatment' column for analysis later
+cover = 
+  cover %>% 
+  mutate(treatment = gsub(plot, pattern = '^.*:', replacement = ''),
+         planting = substr(treatment, 1, 1),
+         followup = substr(treatment, 2, 2))
+
+#### cover long ################################################################
+
+# make a table of all the midpoints for each included subtransect
+
+# want a table with 1 row per location, instead of 1 row per patch
+# this lapply gives you a list where every item in the 
+# list is a vector of numbers. Each number is the midpoint of a 0.25m segment
+# along the transect:
+cover$position_m = 
+  lapply(X = 1:nrow(cover), 
+         FUN = function(i){
+           seq(from = cover$location_min[i]+(0.25/2), 
+               to = cover$location_max[i]-(0.25/2), 
+               by = 0.25)})
+
+# take the list of vectors, where each element is all the locations in 
+# between location_min and location_max, and make it longwise where each 
+# row is a location:
+cover_long = 
+  cover %>%
+  unnest(position_m) %>%
+  select(time, treatment, planting, followup, block, plot, transect, subtransect, species,
+         cover_type, avg_height_cm, position_m) %>%
+  arrange(time, block, plot, transect, subtransect, position_m) %>%
+  
+  # add an expected fire behavior type
+  mutate(fire_type = 
+           ifelse(cover_type == 'shrub' & avg_height_cm > 0.5,
+                  'high',
+                  ifelse(is.element(cover_type, c('shrub', 'grass', 'forb', 
+                                                  'fuel', 'conifer')),
+                         'low',
+                         ifelse(cover_type == 'bare',
+                                'none',
+                                NA)))) 
+
+#### moebius ###################################################################
+# this table already has 1 row per patch, but we want to aggregate contiguous 
+# patches across subtransect boundaries and by doing the moebius strip thing 
+# connectiong 0m to 90m on each transect
+
 
 # convert location from being a by-subtransect position (0-30m) to a by-transect 
 # postiion (0-90m)
@@ -167,40 +220,10 @@ cover =
                                              NA)))) %>%
   select(-st)
 
-#### cover long ################################################################
-
-# make a table of all the midpoints for each included subtransect
-
-# want a table with 1 row per location, instead of 1 row per patch
-# this lapply gives you a list where every item in the 
-# list is a vector of numbers. Each number is the midpoint of a 0.25m segment
-# along the transect:
-cover$position_m = 
-  lapply(X = 1:nrow(cover), 
-         FUN = function(i){
-           seq(from = cover$location_min[i]+(0.25/2), 
-               to = cover$location_max[i]-(0.25/2), 
-               by = 0.25)})
-
-# take the list of vectors, where each element is all the locations in 
-# between location_min and location_max, and make it longwise where each 
-# row is a location:
-cover_long = 
-  cover %>%
-  unnest(position_m) %>%
-  select(time, block, plot, transect, subtransect, species,
-         cover_type, avg_height_cm, position_m) %>%
-  arrange(time, block, plot, transect, subtransect, position_m)
-
-#### moebius ###################################################################
-# this table already has 1 row per patch, but we want to aggregate contiguous 
-# patches across subtransect boundaries and by doing the moebius strip thing 
-# connectiong 0m to 90m on each transect
-
 # first simplify the table to just the relevant columns
 patches = 
   cover %>%
-  select(time, transect, location_min, location_max, 
+  select(time, treatment, planting, followup, block, plot, transect, location_min, location_max, 
          species, cover_type, cover_length, avg_height_cm) %>%
   group_by(time, transect) %>%
   arrange(time, transect, location_min) %>%
@@ -208,6 +231,10 @@ patches =
   mutate(obs = paste0(time, ':', transect))
 
 head(patches)
+
+
+
+
 
 # set the current patch ID to 1, and make an empty vector of patch IDs we'll fill
 current_patch = 1
@@ -299,7 +326,7 @@ patches =
                   ':', 
                   str_pad(patch_id, width = 5, side = 'left', pad = 0))) %>%
   select(-obs) %>%
-  group_by(time, transect, patch_id) %>%
+  group_by(time, treatment, planting, followup, block, plot, transect, patch_id) %>%
   
   # take the only cover type present, 
   # a weighted-by-cover-length average height, 
@@ -308,7 +335,21 @@ patches =
             avg_height_cm = sum(avg_height_cm*(cover_length/sum(cover_length,
                                                                 na.rm = TRUE)),
                                 na.rm = TRUE),
-            cover_length = sum(cover_length, na.rm = TRUE))
+            cover_length = sum(cover_length, na.rm = TRUE)) %>%
+  ungroup() %>%
+  
+  # add an expected fire behavior type
+  mutate(fire_type = 
+           ifelse(cover_type == 'shrub' & avg_height_cm > 0.5,
+                  'high',
+                  ifelse(is.element(cover_type, c('shrub', 'grass', 'forb', 
+                                                  'fuel', 'conifer')),
+                         'low',
+                         ifelse(cover_type == 'bare',
+                                'none',
+                                NA)))) 
+
+#### checking ##################################################################
 
 # data exploration making sure we got that right
 ggplot(data = patches,
@@ -334,7 +375,23 @@ ggplot(data = patches,
   scale_fill_viridis_d()+
   labs(y = 'total cover (m)')
 
-# looks good
+# only keep transects with PRE and POST observations
+missing_pre_or_post = 
+  patches %>%
+  group_by(transect, time) %>%
+  summarise() %>%
+  ungroup() %>%
+  group_by(transect) %>%
+  summarise(time = length(unique(time))) %>%
+  ungroup() %>%
+  filter(time != 2)
+
+missing_pre_or_post
+
+missing_pre_or_post = missing_pre_or_post$transect
+patches = 
+  patches %>%
+  filter(!is.element(transect, missing_pre_or_post))
 
 #### write results #############################################################
 
