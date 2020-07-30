@@ -42,8 +42,10 @@ log_transform = function(x){log(x+min(x[x>0]))}
 cover_long = 
   readRDS(here::here('02-data', '02-for_analysis', 'cover_long.rds')) %>%
   
-  # enforce level ordering for time
-  mutate(time = factor(time, levels = c('pre', 'post')))
+  # enforce level ordering for time, planting, and followup
+  mutate(time = factor(time, levels = c('pre', 'post')),
+         planting = factor(planting, levels = c('E', 'C')),
+         followup = factor(followup, levels = c('N', 'H', 'G')) )
 
 # patches has 1 row per contiguous patch of a cover_type. Patches can span 
 # subtransects within a 90m transect, and we treat 0m as contiguous with 90m 
@@ -453,7 +455,12 @@ ggplot(data = cover_agg,
 
 ## Spatial structure
 
+```{r}
 
+
+
+
+```
 
 # Analyses
 
@@ -612,6 +619,484 @@ composition_results =
 This could be turned into an actual statistical model if reviewers want us to.
 
 ## Spatial structure
+
+### Select kappa
+
+Following the recommendation of diggle & rubiero, we select a few values of 
+kappa, use MLE to estimate the other parameters, and compare the log likelihoods 
+for each of the few models to select the best values of kappa. 
+
+```{r}
+library(spaMM)
+
+D = dist(obs_10m[,c('x', 'y')]) %>% as.matrix()
+
+
+
+hif_kappa_05 = 
+  fitme(data = obs_10m %>% filter(time == 'pre'),
+        high_intensity_fuels ~ 1 + Matern(1|x+y),
+        family = binomial(link = 'logit'),
+        distMatrix = D,
+        fixed = list(corrPars = list("1" = list('nu' = 0.5))),
+        verbose = TRUE)
+
+saveRDS(hif_kappa_05,
+        here::here('02-data', '03-results', 'hif_kappa05.rds'))
+
+hif_kappa_15 = 
+  fitme(data = obs_10m,
+        high_intensity_fuels ~ time + Matern(1|x+y)+Matern(pre|x+y) + Matern(post|x+y),
+        family = binomial(link = 'logit'),
+        distMatrix = D,
+        fixed = list(corrPars = list('1' = list(nu = 1.5),
+                                    '2' = list(nu = 1.5),
+                                    '3' = list(nu = 1.5))),
+        verbose = TRUE)
+
+saveRDS(hif_kappa_05,
+        here::here('02-data', '03-results', 'hif_kappa05.rds'))
+
+hif_kappa_25 = 
+  fitme(data = obs_10m,
+        high_intensity_fuels ~ time + Matern(1|x+y)+Matern(pre|x+y) + Matern(post|x+y),
+        family = binomial(link = 'logit'),
+        distMatrix = D,
+        fixed = list(corrPars = list('1' = list(nu = 2.5),
+                                    '2' = list(nu = 2.5),
+                                    '3' = list(nu = 2.5))),
+        verbose = TRUE)
+
+saveRDS(hif_kappa_05,
+        here::here('02-data', '03-results', 'hif_kappa05.rds'))
+
+
+
+```
+
+
+### Profile log likelihood for nu1 and nu2
+
+Define a grid of values for nu1 or nu2, use MLE to estimate the other 
+parameters (holding either nu1/kappa1/kappa2 fixed or nu2/kappa1/kappa2 fixed),
+store the log likelihoods for each of the models. Use chi2 test to 
+construct confidence intervals. (Is there a better way than the grid? Try 
+widening intervals around the MLE estimate of nu1 or nu2, do the chi2 test, 
+and stop when you find the edge of the CI? Probably fewer iterations but 
+harder to code, especially harder to code efficiently.) Grid version  
+parallelizes easily. Does this all need to be 1 model, or separate models for 
+pre and post? If its all 1 model, shouldn't I be allowing cross-correlation?)
+
+
+
+### Fit 
+
+```{r}
+shrubs.fit = 
+  fitme(data = obs_10m,
+        high_intensity_fuels ~ time + Matern(1|x+y)+Matern(pre|x+y) + Matern(post|x+y),
+        family = binomial(link = 'logit'),
+        distMatrix = D,
+        fixed = list(corrPars = list('1' = list(nu = 1.5),
+                                    '2' = list(nu = 1.5)),
+        verbose = TRUE))
+summary(shrubs.fit)
+
+
+matern = 
+  function(kappa, phi){
+    
+    # eqation 3.6 in section 3.4.1 of model-based-geostatistics
+    rho = 
+      function(u){
+        
+        # if the distance is 0, the correlation between S_i and S_i' is 1
+        ifelse(u == 0,
+               1,
+               
+               # otherwise, the correlation is defined by the matern function
+               # with parameters kappa and phi (equation 3.6 in section 3.4.1)
+               (((2^(kappa-1))*gamma(kappa))^(-1)) * 
+                 ((u / phi)^kappa) * 
+                 # I'm not 100% that this is the correct modified bessel function, but
+                 # the text uses the notation K_kappa() and everywhere I can find 
+                 # the modified bessel function of the 3rd kind (aka modified bessel 
+                 # function of the 2nd kind) is denoted using K rather than I, so I'm 
+                 # assuming thats the one intended in the text. Other sources 
+                 # explicitly mention modified bessel of the 2nd kind.
+                 besselK(x = u / phi,
+                         nu = kappa))
+        
+      }
+    
+    return(rho)
+  }
+gamma1_u = 
+  
+  function(u){
+    shrubs.fit$lambda[1] * matern(kappa = shrubs.fit$corrPars$`1`$nu,
+                  phi = 1/shrubs.fit$corrPars$`1`$rho)(u)
+    }
+
+gamma2_u = 
+  
+  function(u){
+    shrubs.fit$lambda[2] * matern(kappa = shrubs.fit$corrPars$`2`$nu,
+                  phi = 1/shrubs.fit$corrPars$`2`$rho)(u)
+    }
+corr_funs = 
+  data.frame(u = seq(from = 0, to = 500, by = 10)) %>%
+  mutate(pre = gamma1_u(u),
+         post = gamma2_u(u)) %>%
+  pivot_longer(c(pre, post), names_to = c('time'), values_to = 'cov_u')
+
+head(corr_funs)
+
+ggplot(data = corr_funs,
+       aes(x = u, y = cov_u, color = time))+
+  geom_point()+
+  geom_line()
+
+
+rho.1_grid = seq(from = 0.001, to = 0.2, by = 0.001)
+
+rho.1_profile = 
+  sapply(X = rho.1_grid,
+         FUN = function(rho1_i){
+           
+           newfit = 
+             shrubs.fit %>% 
+             update(fixed = list(corrPars = list('1' = list(nu = 1.5, 
+                                                            rho = rho1_i))))
+           
+           return(logLik(newfit))
+           
+         })
+
+rho.2_grid = seq(from = 0.001, to = 0.5, by = 0.001)
+
+rho.2_profile = 
+  sapply(X = rho.2_grid,
+         FUN = function(rho2_i){
+           
+           newfit = 
+             shrubs.fit %>% 
+             update(fixed = list(corrPars = list('2' = list(nu = 1.5, 
+                                                            rho = rho2_i),
+                                                '1' = shrubs.fit$corrPars$`1`),
+                                  lambda = shrubs.fit$lambda),
+              etaFix = list(beta = shrubs.fit$fixef))
+           
+           return(logLik(newfit))
+           
+         })
+
+test = 
+  data.frame(param = rep('rho_1', times = length(rho.1_grid)),
+             value = rho.1_grid,
+             loglik = rho.1_profile)
+
+ggplot(data = test,
+       aes(x = value, y = loglik, color = param))+
+  geom_point()+
+  geom_line()+
+  geom_vline(xintercept = shrubs.fit$corrPars$`1`$rho, col = 'red', lty = 2)
+
+summary(rho.1_profile)
+
+summary(test)             
+summary(shrubs.fit)
+
+logLik(test)
+logLik(shrubs.fit)
+
+shrubs.fit$APHLs
+test$APHLs
+
+
+demo = expand.grid('x' = seq(from = 0, to = 500, by = 10),
+                   'y' = seq(from = 0, to = 500, by = 10))
+
+demo = 
+  rbind(demo %>% mutate(time = 'pre', pre = 1, post = 0),
+        demo %>% mutate(time = 'post', pre = 0, post = 1))
+
+head(demo)
+
+B = matrix(shrubs.fit$fixef, ncol = 1)
+X_i = matrix(c(rep(1, times = nrow(demo)),
+               demo$post),
+             ncol = 2, byrow = FALSE)
+
+XB = X_i %*% B
+
+D = dist(demo[,c('x', 'y')]) %>% as.matrix()
+
+generate_Sigma = 
+  function(s_i, j_i, gamma_j, gamma_0){
+    
+    # n is the number of samples
+    n = nrow(s_i)
+    
+    # get the pairwise distancce matrix D
+    D = dist(s_i) %>% as.matrix()
+    
+    
+    # if there is only 1 dimension of response
+    if (is.null(j_i)){
+      
+      # then gamma_j should be length 1
+      if(length(gamma_j)!=1){
+        stop('No j_i matrix provided but multiple covariance functions given')
+        }
+      
+      # just call the single covariance function on the distance matrix, 
+      # which gives Sigma
+      return(gamma_j(D))
+      
+    } else {
+      
+      # otherwise, get the number of dimensions, and continue on to construct 
+      # the cross covariance matrix Sigma
+      m = ncol(j_i)
+      
+    }
+    
+    # if there is a common component function (gamma_0)
+    if (!is.null(gamma_0)){
+      
+      # n x n covariance matrix for the common component
+      G_0 = gamma_0(D)
+      
+    } else {
+      
+      # common component contributes no covariance
+      G_0 = matrix(data = 0, nrow = nrow(D), ncol = ncol(D))
+      
+    }
+    
+    
+    # To start with, Sigma is equal to just the common component
+    Sigma = G_0
+    
+    # loop over the columns in j_i, each representing a response dimension
+    # each of the m columns column in j_i is a vector of 0s and 1s indicating whether the 
+    # observation s_i is of response variable j (where j = 1,...,m)
+    for (j in 1:m){
+      
+      # build an n x n indicator matrix for sample i, where each cell is 1 if 
+      # both i and i' are of response type j, and 0 otherwise
+      I_j = matrix(data = sapply(X = 1:n,
+                                 FUN = function(i){j_i[i,j] * j_i[,j]}),
+                   nrow = n,
+                   ncol = n)
+      
+      # build the n x x covariance matrix for dimension j, assuming that 
+      # every sample is of response dimension j, and so the cells are the covariance 
+      # of sample j with itself at distance u. This will be multiplied by 0 
+      # if i and i' are not both of response dimension j
+      G_j = gamma_j[[j]](D)
+      
+      # add the covariance of j with itself to the cross covariance matrix sigma
+      Sigma = Sigma + (I_j * G_j)
+      
+      
+    }
+    
+    # return the cross-covariance matrix Sigma
+    return(Sigma)
+    
+  }
+
+
+Sigma = generate_Sigma(s_i = demo[,c('x', 'y')],
+                       j_i = demo[,c('pre', 'post')],
+                       gamma_j = 
+                         c(function(u){
+                           shrubs.fit$lambda[[1]]*matern(shrubs.fit$corrPars$`1`$nu,
+                                                         1/shrubs.fit$corrPars$`1`$rho)(u)},
+                           function(u){
+                             shrubs.fit$lambda[[2]]*matern(shrubs.fit$corrPars$`2`$nu,
+                                                         1/shrubs.fit$corrPars$`2`$rho)(u)}),
+                       gamma_0 = NULL)
+
+Z_i = Sigma %*% rnorm(n = nrow(demo), mean = 0, sd = 1)
+
+mu_i = as.numeric(XB)+as.numeric(Z_i)
+
+eta_i = exp(mu_i)/(exp(mu_i)+1)
+summary(eta_i)
+y_i = rbinom(n = nrow(demo), size = 1, prob = eta_i)
+
+demo = 
+  demo %>%
+  mutate(XB = as.numeric(XB),
+         Z_i = as.numeric(Z_i),
+         mu_i = mu_i,
+         eta_i = eta_i,
+         y_i = as.factor(y_i))
+
+ggplot(data = demo,
+       aes(x = x, y = y, fill = y_i))+
+  geom_tile()+
+  coord_fixed()+
+  scale_fill_viridis_d()+
+  facet_wrap(~time)
+
+ggplot(data = demo,
+       aes(x = x, y = y, fill = mu_i))+
+  geom_tile()+
+  coord_fixed()+
+  scale_fill_viridis_c()+
+  facet_wrap(~time)
+
+summary(shrubs.fit)
+summary(demo[demo$time=='post','eta_i'])
+
+ggplot(data = obs_30m,
+       aes(x = sqrt(total_mgha)))+
+  geom_histogram()+
+  facet_wrap(~time)
+
+
+
+# this is a little jank because not actually using the midpoints of each 
+# 30m subtransect, instead using the 13m mark. Causing everything to be 
+# shifted 2m west. Won't affect spatial relationship between observations, 
+# could have minor effects (2m?) on spatial relationship between observations 
+# and some correctly georeferenced covariate
+obs_30m = 
+  obs_10m %>%
+  mutate(subsubtransect = gsub(subsubtransect, pattern = '^.*:', replacement = '')) %>%
+  filter(subsubtransect == '13') %>%
+  select(-subsubtransect)  %>%
+  mutate(sqrt_total = sqrt(total_mgha))
+
+head(obs_30m)
+
+D30 = dist(obs_30m[,c('x', 'y')]) %>% as.matrix()
+
+# also tried nu = 1.5 and nu = 2.5, both with worse LL
+fuels.spaMM = 
+  fitme(data = obs_30m,
+        log_total ~ time + Matern(1|x+y)+Matern(pre|x+y)+Matern(post|x+y),
+        family = gaussian(),
+        fixed = list(corrPars = list('1' = list(nu = 0.5),
+                                     '2' = list(nu = 0.5),
+                                     '3' = list(nu = 0.5))),
+        distMatrix = D30,
+        verbose = TRUE)
+
+
+
+
+summary(fuels.spaMM)
+summary(fuels.spaMM2)
+demo = expand.grid('x' = seq(from = 0, to = 1000, by = 30),
+                   'y' = seq(from = 0, to = 1000, by = 30))
+
+demo = 
+  rbind(demo %>% mutate(time = 'pre', pre = 1, post = 0),
+        demo %>% mutate(time = 'post', pre = 0, post = 1))
+
+head(demo)
+
+
+B = matrix(fuels.spaMM$fixef, ncol = 1)
+X_i = matrix(c(rep(1, times = nrow(demo)),
+               demo$post),
+             ncol = 2, byrow = FALSE)
+
+XB = X_i %*% B
+
+D = dist(demo[,c('x', 'y')]) %>% as.matrix()
+
+# function for back-transformed spatial covariance
+gamma_T = 
+  function(sigma, kappa, phi){
+    
+    function(u){
+      
+      exp(0+sigma^2)*(exp(sigma^2)-1)*
+        (exp(sigma^2 * matern(kappa, phi)(u))-1)/
+        (exp(sigma^2)-1)
+      
+    }
+    
+  }
+
+
+Sigma_0 = 
+  gamma_T(sigma = fuels.spaMM$lambda[[1]],
+          kappa = fuels.spaMM$corrPars$`1`$nu,
+          phi = 1/fuels.spaMM$corrPars$`1`$rho)(D)
+
+Sigma_1 = 
+  gamma_T(sigma = fuels.spaMM$lambda[[2]],
+          kappa = fuels.spaMM$corrPars$`2`$nu,
+          phi = 1/fuels.spaMM$corrPars$`2`$rho)(D)
+
+Sigma_2 = 
+  gamma_T(sigma = fuels.spaMM$lambda[[3]],
+          kappa = fuels.spaMM$corrPars$`3`$nu,
+          phi = 1/fuels.spaMM$corrPars$`3`$rho)(D)
+
+
+Sigma = generate_Sigma(s_i = demo[,c('x', 'y')],
+                       j_i = demo[,c('pre', 'post')],
+                       gamma_j = 
+                         c(gamma_T(sigma = fuels.spaMM$lambda[[2]],
+                                   kappa = fuels.spaMM$corrPars$`2`$nu,
+                                   phi = 1/fuels.spaMM$corrPars$`2`$rho),
+                           gamma_T(sigma = fuels.spaMM$lambda[[3]],
+                                   kappa = fuels.spaMM$corrPars$`3`$nu,
+                                   phi = 1/fuels.spaMM$corrPars$`3`$rho)),
+                       gamma_0 = gamma_T(sigma = fuels.spaMM$lambda[[1]],
+                                   kappa = fuels.spaMM$corrPars$`1`$nu,
+                                   phi = 1/fuels.spaMM$corrPars$`1`$rho))
+
+sim_results = 
+  do.call('rbind',
+          lapply(X = 1:4,
+                 FUN = function(sim){
+                   
+                     demo %>%
+                      mutate(XB = 
+                               as.numeric(XB),
+                             T_i = 
+                               as.numeric(Sigma %*% rnorm(n = nrow(demo), 
+                                                          mean = (0), 
+                                                          sd = 1)),
+                             # i think this is probably not right
+                             y_i = exp(XB)+T_i+exp(rnorm(n = nrow(demo),
+                                                           mean = 0,
+                                                           sd = sqrt(fuels.spaMM$phi))),
+                             time = 
+                               factor(time, levels = c('pre', 'post')),
+                             sim_id = sim)
+                   
+                 }))
+
+
+head(sim_results)
+
+ggplot(data = sim_results,
+       aes(x = x, y = y, fill = y_i))+
+  geom_tile()+
+  coord_fixed()+
+  scale_fill_viridis_c()+
+  facet_grid(sim_id~time)
+
+  ggplot(data = sim_results,
+       aes(x = x, y = y, fill = eta_i))+
+  geom_tile()+
+  coord_fixed()+
+  scale_fill_viridis_c()+
+  facet_grid(sim_id~time)
+
+head(obs_30m)
+
+```
 
 # Results
 
