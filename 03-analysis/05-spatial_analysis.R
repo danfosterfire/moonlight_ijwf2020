@@ -594,16 +594,11 @@ ggplot(data =
 
 #### write results #############################################################
 
-# save model fits
-logtotal_fits = 
-  list('best' = best.total,
-       'kappa' = mle_fits.total,
-       'phi_pre' = c(phipre_profLL, phipre_profLL2, phipre_profLL3),
-       'phi_post' = c(phipost_profLL, phipost_profLL2),
-       'sigma_pre' = c(sigmapre_profLL, sigmapre_profLL2),
-       'sigma_post' = c(sigmapost_profLL, sigmapost_profLL2, sigmapost_profLL3))
-saveRDS(logtotal_fits,
-        here::here('02-data','03-results','logtotal_fits.rds'))
+# save model fit; it would be nice to save all the fits but the files are way 
+# too big to sync via git and IM not setting up dropbox on this server just for 
+# these.
+saveRDS(best.total,
+        here::here('02-data', '03-results', 'logtotal_fit.rds'))
 
 # save the profile likelihood table
 saveRDS(profLL_results_full,
