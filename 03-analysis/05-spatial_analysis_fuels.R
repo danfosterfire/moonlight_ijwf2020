@@ -1,4 +1,7 @@
-
+# fitting a linear mixed effects model with crossed matern spatial correlation 
+# to the (log) total fuel loads, aggregated to 30m scale. Then using profile 
+# log likelihood tests to build 95% confidence intervals for the spatial 
+# correlation parameters phi (the range) and sigma (the spatial variance). 
 
 
 #### setup #####################################################################
