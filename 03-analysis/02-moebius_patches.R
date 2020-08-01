@@ -182,7 +182,7 @@ cover_long =
   
   # add an expected fire behavior type
   mutate(fire_type = 
-           ifelse(cover_type == 'shrub' & avg_height_cm > 0.5,
+           ifelse(cover_type == 'shrub' & avg_height_cm >= 50,
                   'high',
                   ifelse(is.element(cover_type, c('shrub', 'grass', 'forb', 
                                                   'fuel', 'conifer')),

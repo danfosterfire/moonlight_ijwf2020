@@ -17,76 +17,12 @@ library(sf)
 
 
 # set up parallel processing
-cl = makeCluster(parallel::detectCores()-2L)
+cl = makeCluster(6)
 registerDoParallel(cl)
 
 set.seed(110819)
 #### load and preprocess data ##################################################
 
-#### relaxing fuels graphing ###################################################
-funtimes = 
-  readRDS(here::here('02-data', '03-results', 'logtotal_profLL_bounds.rds'))
-
-matern = 
-  function(kappa, phi){
-    
-    # eqation 3.6 in section 3.4.1 of model-based-geostatistics
-    rho = 
-      function(u){
-        
-        # if the distance is 0, the correlation between S_i and S_i' is 1
-        ifelse(u == 0,
-               1,
-               
-               # otherwise, the correlation is defined by the matern function
-               # with parameters kappa and phi (equation 3.6 in section 3.4.1)
-               (((2^(kappa-1))*gamma(kappa))^(-1)) * 
-                 ((u / phi)^kappa) * 
-                 # I'm not 100% that this is the correct modified bessel function, but
-                 # the text uses the notation K_kappa() and everywhere I can find 
-                 # the modified bessel function of the 3rd kind (aka modified bessel 
-                 # function of the 2nd kind) is denoted using K rather than I, so I'm 
-                 # assuming thats the one intended in the text. Other sources 
-                 # explicitly mention modified bessel of the 2nd kind.
-                 besselK(x = u / phi,
-                         nu = kappa))
-        
-      }
-    
-    return(rho)
-  }
-
-head(funtimes)
-library(ggplot2)
-
-theoretical_variograms = 
-  expand.grid(distance_m = seq(from = 0, to = 100, by = 1),
-              time = c('pre', 'post'),
-              phi = c('low95', 'MLE', 'high95'),
-              sigma = c('low95', 'MLE', 'high95'))
-
-
-head(funtimes)
-
-funtimes %>%
-  select(parameter, value, MLE, type) %>%
-  pivot_wider(names_from = type, values_from = value) %>%
-  mutate(time = gsub(parameter, pattern = '^.*_', replacement = ''),
-         parameter = gsub(parameter, pattern = '_.*$', replacement = '')) %>%
-  #crossing(distance_m = seq(from = 0, to = 100, by = 1)) %>%
-  #mutate()
-  pivot_longer()
-
-head(theoretical_variograms)
-
-cover_long = 3
-  
-
-# observed data on shrub cover and fuel loads for the 10m sub-sub-transects. 
-# note that the CWD load is an average at the 30m subtransect level, so we 
-# expect strong correlation in fuel loads at the subtransect level. This 
-# must be explicitly included in a model, either via a random effect for 
-# subtransects or an explicitly spatial random effect. 
 obs_10m = 
   readRDS(here::here('02-data', 
                      '02-for_analysis', 
@@ -106,44 +42,27 @@ obs_10m =
   mutate(pre = ifelse(time=='pre',TRUE,FALSE),
          post = ifelse(time=='post', TRUE, FALSE))
 
-D10 = dist(obs_10m[,c('x', 'y')]) %>% as.matrix()
-
-# this is a little jank because not actually using the midpoints of each 
-# 30m subtransect, instead using the 13m mark. Causing everything to be 
-# shifted 2m west. Won't affect spatial relationship between observations, 
-# could have minor effects (2m?) on spatial relationship between observations 
-# and some correctly georeferenced covariate
-obs_30m = 
-  
-  # get the coordinates and id variables for the middle of each 30m subtransect
-  obs_10m %>%
-  mutate(subsubtransect = gsub(subsubtransect, pattern = '^.*:', replacement = '')) %>%
-  filter(subsubtransect == '13') %>%
-  select(time, pre, post, treatment, planting, followup,
-         block, plot, subtransect, subsubtransect, x, y) %>%
-  
-  # join in the average data for the subtransect
-  left_join(x = .,
-            y = 
-              obs_10m %>%
-              group_by(time, subtransect) %>%
-              summarise(litterduff_mgha = mean(litterduff_mgha, na.rm = TRUE),
-                        fwd_mgha = mean(fwd_mgha, na.rm = TRUE),
-                        cwd_mgha = mean(cwd_mgha, na.rm = TRUE),
-                        p_highshrubs = mean(p_highshrubs, na.rm = TRUE),
-                        total_mgha = litterduff_mgha+fwd_mgha+cwd_mgha) %>%
-              ungroup()) %>%
-  
-  # log transform the fuels
-  mutate(log_total = log(total_mgha),
-         log_litterduff = log_plus_min(litterduff_mgha),
-         log_fwd = log_plus_min(fwd_mgha),
-         log_cwd = log_plus_min(cwd_mgha))
-
-# pairwise distance matrix
-D30 = dist(obs_30m[,c('x', 'y')]) %>% as.matrix()
 
 
+head(obs_10m)
+
+
+#### data exploration ##########################################################
+library(ggplot2)
+
+
+ggplot(data = obs_10m,
+       aes(x = p_highshrubs, color = time))+
+  geom_density(lwd = 1)+
+  theme_minimal()+
+  scale_color_viridis_d(begin = 0.05, end = 0.85, option = 'C')
+
+#### initial fit ###############################################################
+
+# really just for testing purposes
+shrubs.fit = 
+  spaMM::fitme(data = obs_10m,
+               )
 
 #### select kappa values #######################################################
 
@@ -674,5 +593,101 @@ saveRDS(profLL_results_bounds,
 stopCluster(cl)
 stopImplicitCluster()
 
+
+#### relaxing fuels graphing ###################################################
+funtimes = 
+  readRDS(here::here('02-data', '03-results', 'logtotal_profLL_bounds.rds'))
+
+matern = 
+  function(kappa, phi){
+    
+    # eqation 3.6 in section 3.4.1 of model-based-geostatistics
+    rho = 
+      function(u){
+        
+        # if the distance is 0, the correlation between S_i and S_i' is 1
+        ifelse(u == 0,
+               1,
+               
+               # otherwise, the correlation is defined by the matern function
+               # with parameters kappa and phi (equation 3.6 in section 3.4.1)
+               (((2^(kappa-1))*gamma(kappa))^(-1)) * 
+                 ((u / phi)^kappa) * 
+                 # I'm not 100% that this is the correct modified bessel function, but
+                 # the text uses the notation K_kappa() and everywhere I can find 
+                 # the modified bessel function of the 3rd kind (aka modified bessel 
+                 # function of the 2nd kind) is denoted using K rather than I, so I'm 
+                 # assuming thats the one intended in the text. Other sources 
+                 # explicitly mention modified bessel of the 2nd kind.
+                 besselK(x = u / phi,
+                         nu = kappa))
+        
+      }
+    
+    return(rho)
+  }
+
+head(funtimes)
+library(ggplot2)
+
+phi_values = 
+  funtimes %>%
+  select(parameter, value, MLE, type) %>%
+  pivot_wider(names_from = type, values_from = value) %>%
+  mutate(time = gsub(parameter, pattern = '^.*_', replacement = ''),
+         parameter = gsub(parameter, pattern = '_.*$', replacement = '')) %>%
+  pivot_longer(cols = c(MLE, upper, lower), names_to = 'type', values_to = 'value') %>%
+  filter(parameter=='phi')
+
+sigma_values = 
+  funtimes %>%
+  select(parameter, value, MLE, type) %>%
+  pivot_wider(names_from = type, values_from = value) %>%
+  mutate(time = gsub(parameter, pattern = '^.*_', replacement = ''),
+         parameter = gsub(parameter, pattern = '_.*$', replacement = '')) %>%
+  pivot_longer(cols = c(MLE, upper, lower), names_to = 'type', values_to = 'value') %>%
+  filter(parameter=='sigma')
+
+theoretical_variograms = 
+  phi_values %>%
+  inner_join(sigma_values, by = c('time'), suffix = c('_phi', '_sigma')) %>%
+  select(time, type_phi, value_phi, type_sigma, value_sigma) %>%
+  crossing(distance_m = seq(from = 0, to = 1000, by = 1)) %>%
+  mutate(rho_u = matern(0.5, value_phi)(distance_m),
+         variog_u = (value_sigma^2)*(1-rho_u))
+
+
+ggplot(data = 
+         theoretical_variograms %>%
+         filter(type_sigma == 'MLE') %>%
+         select(time, type_phi, rho_u, distance_m) %>%
+         pivot_wider(names_from = type_phi, values_from = rho_u),
+       aes(x = distance_m, color = time, fill = time))+
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.5, lwd = 0)+
+  geom_line(aes(y = MLE), lwd = 1)+
+  theme_minimal()+
+  scale_color_viridis_d(begin = 0.25, end = 0.6, option = 'B')+
+  scale_fill_viridis_d(begin = 0.25, end = 0.6, option = 'B')+
+  labs(y = 'Correlation(x,x\')')
+
+
+
+ggplot(data = 
+         theoretical_variograms %>%
+         filter(type_phi == 'MLE') %>%
+         select(time, type_sigma, variog_u, distance_m) %>%
+         pivot_wider(names_from = type_sigma, values_from = variog_u),
+       aes(x = distance_m, color = time, fill = time))+
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.5, lwd = 0)+
+  geom_line(aes(y = MLE), lwd = 1)+
+  theme_minimal()+
+  scale_color_viridis_d(begin = 0.25, end = 0.6, option = 'B')+
+  scale_fill_viridis_d(begin = 0.25, end = 0.6, option = 'B')+
+  labs(y = 'V(x,x\')')
+
+# pretreatment, fuels are correlated over a long distance, but the strength of 
+# the spatial effect is weak (at least at short ranges). Post-treatment, 
+# fuels are correlated only over short distances, but the spatial effect is 
+# strong. Fuels are much patchier post treatment!
 
 

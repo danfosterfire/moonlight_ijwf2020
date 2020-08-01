@@ -38,7 +38,7 @@ cover_fuels =
            subsubtransect, cover_type, avg_height_cm) %>%
   summarise(cover_length_m = 0.25*n()) %>%
   ungroup() %>%
-  mutate(high_fuels = ifelse(avg_height_cm > 0.5 & cover_type == 'shrub',
+  mutate(high_fuels = ifelse(avg_height_cm >= 50 & cover_type == 'shrub',
                              1,
                              0)) %>%
   group_by(time, treatment, planting, followup, block, plot, transect, subtransect, subsubtransect) %>%
@@ -81,7 +81,8 @@ fuel_types =
   left_join(cover_fuels %>%
               select(time, treatment, planting, followup, 
                      block, plot, transect, subtransect, subsubtransect,
-                     p_highshrubs = p_high, high_shrub_fuels)) %>%
+                     p_highshrubs = p_high, high_shrub_fuels,
+                     highshrubs_m = high_fuels_length_m, total_m = total_fuels_length_m)) %>%
   filter(!is.na(high_shrub_fuels)) %>%
   mutate(high_intensity_fuels = ifelse(high_fwd | high_shrub_fuels, TRUE, FALSE))
 
