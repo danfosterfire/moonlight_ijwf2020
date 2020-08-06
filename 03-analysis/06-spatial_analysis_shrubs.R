@@ -40,7 +40,9 @@ obs_10m =
   # make dummy variables for 'time'; this will allow different correlation 
   # structures for the different times
   mutate(pre = ifelse(time=='pre',TRUE,FALSE),
-         post = ifelse(time=='post', TRUE, FALSE))
+         post = ifelse(time=='post', TRUE, FALSE)) %>%
+  mutate(highshrubs_n = highshrubs_m * 4,
+         total_n = total_m * 4)
 
 
 
@@ -52,17 +54,25 @@ library(ggplot2)
 
 
 ggplot(data = obs_10m,
-       aes(x = p_highshrubs, color = time))+
+       aes(x = highshrubs_m/total_m, color = time))+
   geom_density(lwd = 1)+
   theme_minimal()+
   scale_color_viridis_d(begin = 0.05, end = 0.85, option = 'C')
 
 #### initial fit ###############################################################
 
+obs_subset = sample_n(obs_10m, size = 500)
+
+D_subset = dist(obs_subset[,c('x', 'y')]) %>% as.matrix()
+
 # really just for testing purposes
 shrubs.fit = 
-  spaMM::fitme(data = obs_10m,
-               )
+  spaMM::fitme(data = obs_subset,
+               cbind(highshrubs_n, total_n - highshrubs_n)~
+                 time + (1|subsubtransect)+Matern(pre|x+y)+Matern(pre|x+y),
+               family = binomial(),
+               fixed = list(corrPars = list('2' = list(nu = 1.5),
+                                             '3' = list(nu = 1.5))))
 
 #### select kappa values #######################################################
 
@@ -666,9 +676,12 @@ ggplot(data =
   geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.5, lwd = 0)+
   geom_line(aes(y = MLE), lwd = 1)+
   theme_minimal()+
-  scale_color_viridis_d(begin = 0.25, end = 0.6, option = 'B')+
-  scale_fill_viridis_d(begin = 0.25, end = 0.6, option = 'B')+
-  labs(y = 'Correlation(x,x\')')
+  scale_color_viridis_d(begin = 0.05, end = 0.75, option = 'C')+
+  scale_fill_viridis_d(begin = 0.05, end = 0.75, option = 'C')+
+  labs(y = 'Correlation of total fuel load',
+       x = 'Distance (m)',
+       fill = 'Treatment',
+       color = 'Treatment')
 
 
 
